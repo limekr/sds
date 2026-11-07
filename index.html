@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>활동일지</title>
+<title>내가 정하는 한 걸음</title>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#596273; --line:#c9cfda; --brand:#1f5fd0; --brand-ink:#fff; --warn:#b42318; --ok:#0b6b3a; }
   @media (prefers-color-scheme: dark) {
@@ -12,7 +12,14 @@
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.6 -apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif; }
-  header { padding:16px; max-width:760px; margin:0 auto; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  header { background:var(--brand); color:var(--brand-ink); margin:0 0 16px; }
+  .hero-in { max-width:760px; margin:0 auto; padding:14px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .hero-icon { width:52px; height:52px; flex:none; }
+  .hero-text { flex:1 1 220px; min-width:0; }
+  .hero-sub { margin:0; font-size:.95rem; font-weight:600; }
+  .hero-act { margin-left:auto; }
+  header #who { color:inherit; }
+  header button { color:var(--ink); min-height:44px; }
   h1 { font-size:1.35rem; margin:0; }
   h2 { font-size:1.15rem; margin:0 0 12px; }
   main { max-width:760px; margin:0 auto; padding:0 16px 56px; }
@@ -79,8 +86,20 @@
 </head>
 <body>
 <header>
-  <h1>활동일지</h1>
-  <div class="row"><span id="who" class="hint"></span><button id="btnLogout" class="hidden">로그아웃</button></div>
+  <div class="hero-in">
+    <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false" fill="currentColor">
+      <circle cx="32" cy="32" r="31" opacity=".2"/>
+      <ellipse cx="21" cy="44" rx="6.5" ry="9.5"/>
+      <circle cx="15.5" cy="31" r="2.6"/><circle cx="20.5" cy="28.5" r="2.6"/><circle cx="25.8" cy="29" r="2.6"/><circle cx="29.5" cy="32" r="2.4"/>
+      <ellipse cx="43" cy="30" rx="6.5" ry="9.5"/>
+      <circle cx="37.5" cy="17" r="2.6"/><circle cx="42.5" cy="14.5" r="2.6"/><circle cx="47.8" cy="15" r="2.6"/><circle cx="51.5" cy="18" r="2.4"/>
+    </svg>
+    <div class="hero-text">
+      <h1>내가 정하는 한 걸음</h1>
+      <p class="hero-sub">자기주도지원 활동일지</p>
+    </div>
+    <div class="row hero-act"><span id="who" class="hint"></span><button id="btnLogout" class="hidden">로그아웃</button></div>
+  </div>
 </header>
 
 <main>
