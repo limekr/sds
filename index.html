@@ -184,6 +184,55 @@
   function saveToken(t) { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
   function forgetToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
 
+  /* ---------- 이 기기 저장소(IndexedDB): 지난 목록과 작은 사진을 저장해 두었다가 바로 보여 줌 ----------
+     '이 기기에서 계속 로그인'을 선택해 기기 열쇠가 있을 때만 사용하며, 나가기(로그아웃)하면 모두 지웁니다. */
+  const cache = (() => {
+    let dbp = null;
+    function open() {
+      if (dbp) return dbp;
+      dbp = new Promise((res) => {
+        try {
+          const rq = indexedDB.open("sdsCache", 1);
+          rq.onupgradeneeded = () => { rq.result.createObjectStore("kv"); rq.result.createObjectStore("thumb"); };
+          rq.onsuccess = () => res(rq.result);
+          rq.onerror = () => res(null);
+          rq.onblocked = () => res(null);
+        } catch (e) { res(null); }
+      });
+      return dbp;
+    }
+    async function run(stores, mode, fn) {
+      const d = await open(); if (!d) return null;
+      return new Promise((res) => {
+        try {
+          const t = d.transaction(stores, mode); const box = { v: null };
+          fn(t, box);
+          t.oncomplete = () => res(box.v); t.onerror = () => res(null); t.onabort = () => res(null);
+        } catch (e) { res(null); }
+      });
+    }
+    return {
+      getState: () => run("kv", "readonly", (t, b) => { const r = t.objectStore("kv").get("state"); r.onsuccess = () => { b.v = r.result || null; }; }),
+      setState: (v) => run("kv", "readwrite", (t) => { t.objectStore("kv").put(v, "state"); }),
+      getThumbs: (ids) => run("thumb", "readonly", (t, b) => {
+        b.v = {}; const st = t.objectStore("thumb");
+        ids.forEach((id) => { const r = st.get(id); r.onsuccess = () => { if (r.result) b.v[id] = r.result; }; });
+      }),
+      putThumbs: (map) => run("thumb", "readwrite", (t) => { const st = t.objectStore("thumb"); Object.keys(map).forEach((id) => { if (map[id]) st.put(map[id], id); }); }),
+      prune: (keep) => run("thumb", "readwrite", (t) => {
+        const st = t.objectStore("thumb"); const ok = new Set(keep); const rq = st.openKeyCursor();
+        rq.onsuccess = () => { const c = rq.result; if (c) { if (!ok.has(c.key)) st.delete(c.key); c.continue(); } };
+      }),
+      clear: () => run(["kv", "thumb"], "readwrite", (t) => { t.objectStore("kv").clear(); t.objectStore("thumb").clear(); })
+    };
+  })();
+  function cacheOn() { return !DEMO && !!(session && session.token); }
+  function saveState() {
+    if (!cacheOn()) return;
+    cache.setState({ tk: session.token.slice(-10), name: session.name, goals: session.goals, timings: session.timings || [], records, savedAt: Date.now() });
+    cache.prune(records.flatMap((r) => r.photos || []));
+  }
+
   /* ---------- 서버 호출 ---------- */
   async function call(action, payload, keepOnTokenError) {
     const cred = session.token ? { token: session.token } : { name: session.name, phone4: session.phone4 };
@@ -275,31 +324,58 @@
       session = { name: res.name, phone4, goals: res.goals, timings: res.timings || [] };
     }
     $("inName").value = ""; $("inPhone").value = "";
-    enterApp(res.records);
+    cache.clear();
+    enterApp(res.records, res.thumbs);
   });
 
   /* 이 기기에서 저장된 열쇠가 있으면 자동 입장 */
   async function tryResume() {
     const t = getToken();
     if (!t) return;
-    $("login").classList.add("hidden"); status("자동으로 들어가는 중입니다…");
-    session = { token: t, goals: [] };
+    $("login").classList.add("hidden");
+    const saved = DEMO ? null : await cache.getState();
+    const useSaved = !!(saved && saved.tk === t.slice(-10) && Array.isArray(saved.records) && saved.name);
+    if (useSaved) { // 지난번 화면을 바로 보여 주고, 뒤에서 최신 내용을 확인
+      session = { token: t, name: saved.name, goals: saved.goals || [], timings: saved.timings || [] };
+      enterApp(saved.records);
+      status("최신 내용을 확인하는 중입니다…");
+    } else { status("자동으로 들어가는 중입니다…"); session = { token: t, goals: [] }; }
     const res = await call("resume", {}, true);
-    if (res.ok) { session = { token: t, name: res.name, goals: res.goals, timings: res.timings || [] }; enterApp(res.records); return; }
+    if (!session) return; // 확인하는 사이에 나간 경우
+    if (res.ok) {
+      session = { token: t, name: res.name, goals: res.goals, timings: res.timings || [] };
+      if (!useSaved) { enterApp(res.records, res.thumbs); return; }
+      primeThumbs(res.thumbs);
+      if (JSON.stringify(res.goals) !== JSON.stringify(saved.goals)) { renderGoals(); renderGlucose(); }
+      if (JSON.stringify(res.records) !== JSON.stringify(saved.records)) setRecords(res.records); else saveState();
+      status("");
+      return;
+    }
+    if (useSaved) {
+      if (res.error === "TOKEN") { forgetToken(); cache.clear(); leaveApp(MSG.TOKEN, "err"); }
+      else status("저장된 내용을 보여 드리고 있습니다. 인터넷 연결을 확인해 주세요.", "err");
+      return;
+    }
     session = null; $("login").classList.remove("hidden");
     if (res.error === "TOKEN") { forgetToken(); status(MSG.TOKEN, "err"); }
     else status(MSG[res.error] || MSG.SERVER, "err"); // 인터넷 문제 등은 열쇠를 지우지 않음
   }
 
-  function enterApp(recs) {
+  function primeThumbs(map) { // 서버가 목록과 함께 보낸 작은 사진을 바로 사용
+    if (!map) return;
+    const keep = {};
+    Object.keys(map).forEach((id) => { if (map[id] && !photoCache.has("t:" + id)) { photoCache.set("t:" + id, b64ToUrl(map[id], "image/jpeg")); keep[id] = map[id]; showId(id, photoCache.get("t:" + id)); } });
+    if (cacheOn() && Object.keys(keep).length) cache.putThumbs(keep);
+  }
+  function enterApp(recs, thumbs) {
     $("login").classList.add("hidden"); $("app").classList.remove("hidden"); $("btnLogout").classList.remove("hidden");
     $("who").textContent = session.name + " 님";
     status("");
-    renderGoals(); renderGlucose(); resetForm(); setRecords(recs);
+    renderGoals(); renderGlucose(); resetForm(); primeThumbs(thumbs); setRecords(recs);
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").focus();
   }
   function leaveApp(msg, kind) {
-    session = null; records = []; clearPhotoUI();
+    session = null; records = []; clearPhotoUI(); cache.clear();
     photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear(); wantImgs = []; legacyQueue = []; thumbUploads.length = 0;
     $("list").innerHTML = ""; $("app").classList.add("hidden"); $("btnLogout").classList.add("hidden");
     $("login").classList.remove("hidden"); $("who").textContent = "";
@@ -425,6 +501,7 @@
     $("fFilter").innerHTML = '<option value="">전체</option>' + goals.map((g) => "<option>" + esc(g) + "</option>").join("");
     $("fFilter").value = goals.includes(cur) ? cur : "";
     renderList();
+    saveState();
   }
   $("fFilter").addEventListener("change", () => { shown = PAGE; renderList(); });
   $("btnMore").addEventListener("click", () => { shown += PAGE; renderList(); });
@@ -513,7 +590,12 @@
     flushing = true;
     try {
       while (wantImgs.length) {
-        const ids = Array.from(new Set(wantImgs.splice(0).filter((i) => i.isConnected).map((i) => i.dataset.id))).filter((id) => !photoCache.has("t:" + id));
+        let ids = Array.from(new Set(wantImgs.splice(0).filter((i) => i.isConnected).map((i) => i.dataset.id))).filter((id) => !photoCache.has("t:" + id));
+        if (ids.length && cacheOn()) { // 이 기기에 저장된 작은 사진이 있으면 서버에 묻지 않고 바로 표시
+          const stored = (await cache.getThumbs(ids)) || {};
+          Object.keys(stored).forEach((id) => { const u = b64ToUrl(stored[id], "image/jpeg"); photoCache.set("t:" + id, u); showId(id, u); });
+          ids = ids.filter((id) => !photoCache.has("t:" + id));
+        }
         for (let k = 0; k < ids.length; k += BATCH) {
           if (!session) return;
           const part = ids.slice(k, k + BATCH);
@@ -523,6 +605,7 @@
             if (got[id]) { const u = b64ToUrl(got[id], "image/jpeg"); photoCache.set("t:" + id, u); showId(id, u); }
             else if (legacyQueue.indexOf(id) < 0) legacyQueue.push(id);
           });
+          if (cacheOn()) cache.putThumbs(got);
         }
       }
     } finally { flushing = false; }
@@ -555,7 +638,7 @@
         photoCache.set("t:" + id, u); photoCache.set("f:" + id, u);
         showId(id, u);
         const tb = await makeThumb(res.data, res.mime);
-        if (tb) thumbUploads.push({ id, b64: tb });
+        if (tb) { thumbUploads.push({ id, b64: tb }); if (cacheOn()) cache.putThumbs({ [id]: tb }); }
       }
     } finally { legacyRunning = false; }
     while (thumbUploads.length && session && !legacyRunning && !flushing) {
