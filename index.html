@@ -18,7 +18,7 @@
   main { max-width:760px; margin:0 auto; padding:0 16px 56px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
   input, select, textarea, button { font:inherit; color:inherit; }
-  input[type=text], input[type=tel], input[type=date], input[type=search], select, textarea { width:100%; padding:12px; border:2px solid var(--line); border-radius:8px; background:var(--card); }
+  input[type=text], input[type=tel], input[type=date], input[type=search], input[type=password], select, textarea { width:100%; padding:12px; border:2px solid var(--line); border-radius:8px; background:var(--card); }
   textarea { min-height:110px; resize:vertical; }
   button { padding:12px 18px; border-radius:8px; border:2px solid var(--line); background:var(--card); cursor:pointer; min-height:48px; }
   button.primary { background:var(--brand); color:var(--brand-ink); border-color:var(--brand); font-weight:700; }
@@ -61,6 +61,20 @@
   button.danger.solid { background:var(--warn); color:var(--bg); }
   .confirm { margin-top:12px; padding:10px 12px; border:2px solid var(--warn); border-radius:8px; }
   .confirm p { margin:0 0 8px; font-weight:600; }
+  .linkbtn { border:none; background:none; text-decoration:underline; color:var(--brand); min-height:44px; padding:8px 0; }
+  .newdot { display:inline-block; margin-left:6px; font-size:.85rem; font-weight:700; padding:0 10px; border-radius:999px; background:var(--warn); color:var(--bg); }
+  .badge.warnbadge { background:var(--warn); color:var(--bg); }
+  .cm { margin-top:12px; }
+  .cm-toggle { min-height:44px; padding:8px 16px; }
+  .cm-box { margin-top:12px; border-top:1px dashed var(--line); padding-top:12px; }
+  .cm-item { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-bottom:10px; background:var(--card); }
+  .cm-item.staff { border-left:6px solid var(--brand); }
+  .cm-item.isnew { outline:2px solid var(--warn); }
+  .cm-meta { color:var(--muted); font-size:.9rem; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .cm-item p { margin:6px 0 0; white-space:pre-wrap; word-break:break-word; }
+  .cm-item .actions { margin-top:8px; }
+  .cm-item .actions button, .cm-form .actions button { min-height:40px; padding:6px 14px; font-size:.95rem; }
+  .cm-form textarea, .cm-item textarea { min-height:80px; }
 </style>
 </head>
 <body>
@@ -70,7 +84,7 @@
 </header>
 
 <main>
-  <div id="demoBanner" class="banner hidden" role="note">체험 모드입니다. 샘플 데이터이며 저장되지 않습니다. 체험 로그인: 홍길동 / 1234 ('혈당' 목표 있음), 김철수 / 5678 ('혈당' 목표 없음)</div>
+  <div id="demoBanner" class="banner hidden" role="note">체험 모드입니다. 샘플 데이터이며 저장되지 않습니다. 체험 로그인: 홍길동 / 1234 ('혈당' 목표 있음), 김철수 / 5678 ('혈당' 목표 없음). 담당자 체험: 로그인 화면 아래 '담당자로 입장'에서 이름 아무거나 + 비밀번호 staff1234</div>
   <div id="status" role="status" aria-live="polite"></div>
 
   <!-- 로그인 -->
@@ -88,11 +102,37 @@
       <label class="check" for="inRemember"><input type="checkbox" id="inRemember" checked><span>이 기기에서 계속 로그인 <span class="hint">(다음부터 자동으로 들어옵니다. 공용 기기에서는 꺼 주세요)</span></span></label>
       <button class="primary" type="submit" id="btnLogin">들어가기</button>
     </form>
+    <p style="margin:12px 0 0"><button type="button" class="linkbtn" id="btnStaffOpen">담당자로 입장</button></p>
+  </section>
+
+  <!-- 담당자 입장 -->
+  <section id="staffLogin" class="card hidden" aria-labelledby="staffTitle">
+    <h2 id="staffTitle">담당자 입장</h2>
+    <form id="staffForm" autocomplete="off">
+      <div class="field">
+        <label for="sName">담당자 성명 <span class="hint">(댓글에 표시됩니다)</span></label>
+        <input id="sName" type="text" maxlength="20" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="sPw">담당자 비밀번호</label>
+        <input id="sPw" type="password" autocomplete="off" required>
+      </div>
+      <div class="row">
+        <button class="primary" type="submit" id="btnStaffLogin">들어가기</button>
+        <button type="button" id="btnStaffBack">참여자 화면으로</button>
+      </div>
+    </form>
   </section>
 
   <!-- 작성 + 목록 -->
   <section id="app" class="hidden">
-    <div class="card form-card" aria-labelledby="addTitle">
+    <div id="staffBar" class="card hidden">
+      <div class="field" style="margin-bottom:0">
+        <label for="sPick">참여자 선택</label>
+        <select id="sPick"></select>
+      </div>
+    </div>
+    <div class="card form-card" id="formCard" aria-labelledby="addTitle">
       <h2 id="addTitle">활동 기록하기</h2>
       <p id="editNote" class="edit-note hidden" role="note"></p>
       <form id="addForm">
@@ -140,7 +180,7 @@
     </div>
 
     <section class="records" aria-labelledby="recTitle">
-      <h2 id="recTitle">내 활동 기록 <span id="count" class="badge" aria-live="polite"></span></h2>
+      <h2 id="recTitle"><span id="recTitleText">내 활동 기록</span> <span id="count" class="badge" aria-live="polite"></span><span id="newCm" class="badge warnbadge" aria-live="polite"></span></h2>
       <div class="field">
         <label for="fFilter">참여목표별 보기</label>
         <select id="fFilter"><option value="">전체</option></select>
@@ -164,7 +204,9 @@
     TOKEN: "자동 입장이 만료되었습니다. 성명과 전화번호 뒷자리로 다시 입장해 주세요.",
     BAD_REQUEST: "입력한 내용을 확인해 주세요.",
     SERVER: "일시적인 오류가 있습니다. 잠시 후 다시 시도해 주세요.",
-    NETWORK: "인터넷 연결을 확인해 주세요."
+    NETWORK: "인터넷 연결을 확인해 주세요.",
+    STAFF_AUTH: "담당자 비밀번호가 맞지 않습니다. 다시 확인해 주세요.",
+    STAFF_EXPIRED: "담당자 비밀번호가 바뀌었습니다. 다시 입장해 주세요."
   };
   let session = null;     // { name, phone4, goals }  (메모리에만 보관)
   let records = [], shown = PAGE;
@@ -173,6 +215,14 @@
   let editing = null;     // 수정 중인 기록 (없으면 null)
   let pendingDel = null;  // 삭제 확인을 기다리는 기록 id
   const photoCache = new Map();
+  /* 댓글 / 담당자 모드 상태 (모두 메모리에만 보관) */
+  let staff = null;       // 담당자 모드: { name, pw, list:[{name,total,unread}], pick }
+  let comments = [];      // 현재 화면 대상의 댓글 전체 (서버가 보는 사람 기준으로 isNew, mine을 계산해 줌)
+  let cmEnabled = DEMO;   // 서버가 댓글 기능을 지원할 때만 켜짐 (지원 전에는 댓글 영역을 숨김)
+  let openLogs = new Set();   // 댓글창을 펼친 기록 id
+  let drafts = {};            // 쓰다 만 댓글 (다시 그려도 유지)
+  let editingCm = null, pendingCmDel = null, cmBusy = false, lastCmLoad = 0;
+  const nowKst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ");
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
   function status(msg, kind) { const el = $("status"); el.textContent = msg || ""; el.className = kind || ""; }
@@ -235,7 +285,8 @@
 
   /* ---------- 서버 호출 ---------- */
   async function call(action, payload, keepOnTokenError) {
-    const cred = session.token ? { token: session.token } : { name: session.name, phone4: session.phone4 };
+    const cred = staff ? { staffPw: staff.pw, staffName: staff.name, as: staff.pick || undefined }
+      : session.token ? { token: session.token } : { name: session.name, phone4: session.phone4 };
     const body = Object.assign({ action }, cred, payload || {});
     let res;
     if (DEMO) res = await demo(body);
@@ -248,6 +299,8 @@
     if (!res.ok && typeof res.error === "string" && res.error.indexOf("BAD_REQUEST") === 0) res.error = "BAD_REQUEST"; // 세부 사유가 붙은 오류도 같은 안내문으로
     // 입장 중에 열쇠가 해제된 경우(담당자가 기기를 해제했거나 기간 만료) 처음 화면으로 돌려보냄
     if (!res.ok && res.error === "TOKEN" && !keepOnTokenError && session && session.token) { forgetToken(); leaveApp(MSG.TOKEN, "err"); }
+    // 담당자 모드 중에 비밀번호가 바뀐 경우
+    if (!res.ok && res.error === "STAFF_AUTH" && staff && action !== "staff_login") { leaveApp(MSG.STAFF_EXPIRED, "err"); }
     return res;
   }
 
@@ -257,8 +310,70 @@
       { id: "d1", owner: "홍길동", date: "2026-10-28", goals: ["집에서 간단한 요리 배우기"], content: "이웃과 함께 두부 요리를 해 보았다.", feeling: "생각보다 어렵지 않았고 다음에는 국도 끓여 보고 싶다.", photos: [], note: "", glucose: 112, timing: "식후" },
       { id: "d2", owner: "홍길동", date: "2026-10-24", goals: ["식재료 장보기"], content: "동네 마트에서 식재료를 직접 골라 구입했다.", feeling: "필요한 물건을 찾는 데 시간이 걸렸지만 혼자 해냈다.", photos: [], note: "", glucose: null, timing: "" },
       { id: "d3", owner: "김철수", date: "2026-10-20", goals: ["식재료 장보기"], content: "마트 동행 장보기.", feeling: "", photos: [], note: "", glucose: null, timing: "" }
+    ],
+    sfails: 0,
+    comments: [
+      { id: "c1", logId: "d1", by: "담당자", author: "이담당", text: "두부 요리 잘 하셨네요! 다음에는 국도 함께 끓여 봐요.", at: "2026-10-29 10:12", readP: false, readS: true },
+      { id: "c2", logId: "d1", by: "참여자", author: "홍길동", text: "감사합니다. 다음 주에 해 보겠습니다.", at: "2026-10-29 18:40", readP: true, readS: false }
     ] };
+  const cmText = (t) => String(t == null ? "" : t).trim().slice(0, 1000);
+  // 보는 사람(참여자 또는 담당자) 기준으로 댓글 목록을 만들어 줌 (실제 서버도 같은 모양으로 답해야 함)
+  function demoCmList(owner, asStaff, staffName) {
+    const ids = new Set(demoDB.records.filter((r) => r.owner === owner).map((r) => r.id));
+    return demoDB.comments.filter((c) => ids.has(c.logId)).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).map((c) => ({
+      id: c.id, logId: c.logId, by: c.by, author: c.author, text: c.text, at: c.at,
+      isNew: asStaff ? (c.by === "참여자" && !c.readS) : (c.by === "담당자" && !c.readP),
+      mine: asStaff ? (c.by === "담당자" && c.author === staffName) : c.by === "참여자"
+    }));
+  }
+  // 댓글 쓰기·고치기·지우기·읽음 처리. 참여자(asStaff=false)와 담당자(true)가 같은 규칙을 씁니다.
+  function demoCmAct(b, owner, asStaff, staffName) {
+    const side = asStaff ? "담당자" : "참여자";
+    const out = () => ({ ok: true, comments: demoCmList(owner, asStaff, staffName) });
+    const ownLog = (id) => demoDB.records.find((r) => r.id === id && r.owner === owner);
+    const mineCm = (id) => demoDB.comments.find((c) => c.id === id && c.by === side && c.author === (asStaff ? staffName : owner) && ownLog(c.logId));
+    if (b.action === "addcomment") {
+      const t = cmText(b.text);
+      if (!t || !ownLog(b.logId)) return { ok: false, error: "BAD_REQUEST" };
+      demoDB.comments.push({ id: "c" + Date.now(), logId: b.logId, by: side, author: asStaff ? staffName : owner, text: t, at: nowKst(), readP: !asStaff, readS: asStaff });
+      return out();
+    }
+    if (b.action === "editcomment") {
+      const c = mineCm(b.id), t = cmText(b.text);
+      if (!c || !t) return { ok: false, error: "BAD_REQUEST" };
+      c.text = t; return out();
+    }
+    if (b.action === "delcomment") {
+      const c = mineCm(b.id);
+      if (!c) return { ok: false, error: "BAD_REQUEST" };
+      demoDB.comments.splice(demoDB.comments.indexOf(c), 1); return out();
+    }
+    if (b.action === "readcomments") {
+      demoDB.comments.forEach((c) => { if (c.logId === b.logId && ownLog(c.logId) && c.by !== side) { if (asStaff) c.readS = true; else c.readP = true; } });
+      return out();
+    }
+    return null;
+  }
+  function demoStaff(b) {
+    if (demoDB.sfails >= 10) return { ok: false, error: "LOCKED" };
+    if (b.staffPw !== "staff1234") { demoDB.sfails++; return { ok: false, error: "STAFF_AUTH" }; }
+    demoDB.sfails = 0;
+    const name = String(b.staffName || "").trim().slice(0, 20);
+    if (!name) return { ok: false, error: "BAD_REQUEST" };
+    const owner = b.as, act = String(b.action).replace(/^staff_/, "");
+    if (act === "login") {
+      const owners = [...new Set(demoDB.records.map((r) => r.owner))];
+      return { ok: true, participants: owners.map((o) => ({ name: o, total: demoDB.records.filter((r) => r.owner === o).length, unread: demoCmList(o, true, name).filter((c) => c.isNew).length })) };
+    }
+    if (!demoDB.records.some((r) => r.owner === owner)) return { ok: false, error: "BAD_REQUEST" };
+    if (act === "records") return { ok: true, records: demoDB.records.filter((r) => r.owner === owner), comments: demoCmList(owner, true, name) };
+    if (b.action === "photos") return { ok: true, photos: {} };
+    if (b.action === "photo") return { ok: false, error: "BAD_REQUEST" };
+    const r = demoCmAct(Object.assign({}, b, { action: act }), owner, true, name);
+    return r || { ok: false, error: "BAD_REQUEST" };
+  }
   async function demo(b) {
+    if (b.staffPw !== undefined) return demoStaff(b);
     let me;
     if (b.token) {
       me = b.token === "demo-홍길동" ? "홍길동" : b.token === "demo-김철수" ? "김철수" : null;
@@ -298,6 +413,8 @@
       demoDB.records.splice(demoDB.records.indexOf(rec), 1);
     }
     const recs = mine();
+    if (b.action === "comments") return { ok: true, comments: demoCmList(me, false) };
+    if (/^(addcomment|editcomment|delcomment|readcomments)$/.test(b.action)) return demoCmAct(b, me, false) || { ok: false, error: "BAD_REQUEST" };
     if (b.action === "photo") return demoDB.photos[b.id] ? { ok: true, mime: "image/jpeg", data: demoDB.photos[b.id] } : { ok: false, error: "BAD_REQUEST" };
     if (b.action === "photos") return { ok: true, mime: "image/jpeg", photos: {} };
     if (b.action === "savethumb") return { ok: true };
@@ -372,12 +489,16 @@
     $("who").textContent = session.name + " 님";
     status("");
     renderGoals(); renderGlucose(); resetForm(); primeThumbs(thumbs); setRecords(recs);
+    loadComments();
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").focus();
   }
   function leaveApp(msg, kind) {
     session = null; records = []; clearPhotoUI(); cache.clear();
+    staff = null; comments = []; cmEnabled = DEMO; openLogs = new Set(); drafts = {}; editingCm = null; pendingCmDel = null;
     photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear(); wantImgs = []; legacyQueue = []; thumbUploads.length = 0;
     $("list").innerHTML = ""; $("app").classList.add("hidden"); $("btnLogout").classList.add("hidden");
+    $("staffBar").classList.add("hidden"); $("formCard").classList.remove("hidden"); $("staffLogin").classList.add("hidden");
+    $("recTitleText").textContent = "내 활동 기록"; $("newCm").textContent = ""; $("count").textContent = "";
     $("login").classList.remove("hidden"); $("who").textContent = "";
     status(msg, kind); $("inName").focus();
   }
@@ -386,7 +507,7 @@
     if (session && session.token) { // 서버에서도 이 기기의 열쇠를 해제 (최대 4초 대기)
       await Promise.race([call("logout", {}, true), new Promise((r) => setTimeout(r, 4000))]);
     }
-    forgetToken();
+    if (!staff) forgetToken(); // 담당자 모드에서 나갈 때는 이 기기의 참여자 열쇠를 건드리지 않음
     $("btnLogout").disabled = false;
     leaveApp("나왔습니다.", "ok");
   });
@@ -520,7 +641,7 @@
       (r.glucose != null ? '<p><span class="lbl">혈당</span>' + esc(r.glucose) + " mg/dL" + (r.timing ? " (" + esc(r.timing) + ")" : "") + "</p>" : "") +
       (r.note ? '<p><span class="lbl">비고</span>' + esc(r.note) + "</p>" : "") +
       (r.photos.length ? '<div class="photos">' + r.photos.map((id, i) => '<img data-id="' + esc(id) + '" alt="' + esc(r.date) + ' 활동 사진 ' + (i + 1) + '" tabindex="0">').join("") + "</div>" : "") +
-      actionsHtml(r) + "</article>"
+      (staff ? "" : actionsHtml(r)) + commentsHtml(r) + "</article>"
     ).join("") : '<div class="card hint">아직 기록이 없습니다.</div>';
     loadPhotos("#list img[data-id]");
   }
@@ -550,6 +671,7 @@
   $("btnCancelEdit").addEventListener("click", () => { resetForm(); status("수정을 취소했습니다.", "ok"); $("list").scrollIntoView({ behavior: "smooth", block: "start" }); });
   $("list").addEventListener("click", async (e) => {
     const b = e.target.closest("button[data-act]"); if (!b) return;
+    if (b.dataset.act.indexOf("cm") === 0) { cmAction(b); return; }
     const id = b.dataset.id, act = b.dataset.act, r = records.find((x) => x.id === id);
     if (act === "edit" && r) startEdit(r);
     else if (act === "del") { pendingDel = id; renderList(); const c = document.querySelector('#list button[data-act="delno"]'); if (c) c.focus(); }
@@ -670,6 +792,177 @@
   }
   $("list").addEventListener("click", (e) => { const i = e.target.closest("img[data-id]"); if (i) toggleBig(i); });
   $("list").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("img[data-id]")) { e.preventDefault(); toggleBig(e.target); } });
+
+  /* ---------- 댓글 ---------- */
+  function renderNewBadge() {
+    const n = comments.filter((c) => c.isNew).length;
+    $("newCm").textContent = n ? "새 댓글 " + n : "";
+    if (staff && staff.pick) { // 담당자의 참여자 선택 목록에도 새 댓글 수를 맞춰 줌
+      const p = staff.list.find((x) => x.name === staff.pick);
+      if (p && p.unread !== n) { p.unread = n; renderPick(); }
+    }
+  }
+  const cmBy = (logId) => comments.filter((c) => c.logId === logId);
+  function commentsHtml(r) {
+    if (!cmEnabled || !r.id) return "";
+    const list = cmBy(r.id), nn = list.filter((c) => c.isNew).length, open = openLogs.has(r.id), id = esc(r.id);
+    let h = '<div class="cm"><button type="button" class="cm-toggle" data-act="cm" data-id="' + id + '" aria-expanded="' + open + '">' +
+      (open ? "댓글 접기" : "댓글 " + list.length + "개") + (nn ? ' <span class="newdot">새 댓글 ' + nn + "</span>" : "") + "</button>";
+    if (open) {
+      h += '<div class="cm-box">' + (list.length ? list.map(cmItemHtml).join("") : '<p class="hint">아직 댓글이 없습니다.</p>') +
+        '<div class="cm-form"><label for="cmNew-' + id + '">댓글 쓰기</label>' +
+        '<textarea id="cmNew-' + id + '" data-draft="n:' + id + '" maxlength="1000">' + esc(drafts["n:" + r.id] || "") + "</textarea>" +
+        '<div class="row actions"><button type="button" class="primary" data-act="cmadd" data-id="' + id + '">댓글 등록</button></div></div></div>';
+    }
+    return h + "</div>";
+  }
+  function cmItemHtml(c) {
+    const isStaff = c.by === "담당자", cid = esc(c.id), edit = editingCm === c.id;
+    let h = '<div class="cm-item' + (isStaff ? " staff" : "") + (c.isNew ? " isnew" : "") + '"><div class="cm-meta"><strong>' + esc(c.author) + "</strong><span>" +
+      (isStaff ? "담당자" : "참여자") + "</span><span>" + esc(String(c.at).slice(5, 16)) + "</span>" + (c.isNew ? '<span class="newdot">새 댓글</span>' : "") + "</div>";
+    if (edit) {
+      h += '<textarea data-draft="e:' + cid + '" maxlength="1000" aria-label="댓글 수정">' + esc(drafts["e:" + c.id] != null ? drafts["e:" + c.id] : c.text) + "</textarea>" +
+        '<div class="row actions"><button type="button" class="primary" data-act="cmsave" data-cid="' + cid + '">저장</button>' +
+        '<button type="button" data-act="cmeditno" data-cid="' + cid + '">취소</button></div>';
+    } else {
+      h += "<p>" + esc(c.text) + "</p>";
+      if (c.mine) {
+        if (pendingCmDel === c.id) {
+          h += '<div class="confirm" role="alertdialog" aria-label="댓글 삭제 확인"><p>이 댓글을 삭제할까요?</p><div class="row">' +
+            '<button type="button" class="danger solid" data-act="cmdelok" data-cid="' + cid + '">삭제하기</button>' +
+            '<button type="button" data-act="cmdelno" data-cid="' + cid + '">취소</button></div></div>';
+        } else {
+          h += '<div class="row actions"><button type="button" data-act="cmedit" data-cid="' + cid + '">수정</button>' +
+            '<button type="button" class="danger" data-act="cmdel" data-cid="' + cid + '">삭제</button></div>';
+        }
+      }
+    }
+    return h + "</div>";
+  }
+  $("list").addEventListener("input", (e) => { const t = e.target.closest("textarea[data-draft]"); if (t) drafts[t.dataset.draft] = t.value; });
+
+  async function cmAction(b) {
+    const act = b.dataset.act, id = b.dataset.id, cid = b.dataset.cid, pre = staff ? "staff_" : "";
+    const fail = (res) => status(MSG[res.error] || MSG.SERVER, "err");
+    const applied = (res, msg) => { comments = res.comments || []; renderNewBadge(); renderList(); if (msg) status(msg, "ok"); };
+    const focusSel = (sel) => { const el = document.querySelector(sel); if (el) el.focus(); };
+    if (act === "cm") {
+      if (openLogs.has(id)) openLogs.delete(id); else openLogs.add(id);
+      editingCm = null; pendingCmDel = null; renderList();
+      focusSel('.cm-toggle[data-id="' + CSS.escape(id) + '"]');
+      if (openLogs.has(id) && cmBy(id).some((c) => c.isNew)) { // 펼치면 읽은 것으로 처리 (이번 화면에서는 '새' 표시를 그대로 둠)
+        const res = await call(pre + "readcomments", { logId: id });
+        if (res.ok) { comments = res.comments || comments; renderNewBadge(); }
+      }
+    } else if (act === "cmadd") {
+      const t = (drafts["n:" + id] || "").trim();
+      if (!t) { status("댓글 내용을 적어 주세요.", "err"); focusSel("#cmNew-" + CSS.escape(id)); return; }
+      if (cmBusy) return;
+      cmBusy = true; b.disabled = true; status("댓글을 등록하는 중입니다…");
+      const res = await call(pre + "addcomment", { logId: id, text: t });
+      cmBusy = false; b.disabled = false;
+      if (!res.ok) { fail(res); return; }
+      delete drafts["n:" + id]; applied(res, "댓글을 등록했습니다.");
+      focusSel('.cm-toggle[data-id="' + CSS.escape(id) + '"]');
+    } else if (act === "cmedit") {
+      editingCm = cid; pendingCmDel = null; renderList();
+      focusSel('textarea[data-draft="e:' + CSS.escape(cid) + '"]');
+    } else if (act === "cmeditno") {
+      delete drafts["e:" + cid]; editingCm = null; renderList();
+    } else if (act === "cmsave") {
+      const cur = comments.find((c) => c.id === cid);
+      const t = (drafts["e:" + cid] != null ? drafts["e:" + cid] : cur ? cur.text : "").trim();
+      if (!t) { status("댓글 내용을 적어 주세요.", "err"); return; }
+      if (cmBusy) return;
+      cmBusy = true; b.disabled = true; status("저장하는 중입니다…");
+      const res = await call(pre + "editcomment", { id: cid, text: t });
+      cmBusy = false; b.disabled = false;
+      if (!res.ok) { fail(res); return; }
+      delete drafts["e:" + cid]; editingCm = null; applied(res, "댓글을 수정했습니다.");
+    } else if (act === "cmdel") {
+      pendingCmDel = cid; renderList(); focusSel('button[data-act="cmdelno"]');
+    } else if (act === "cmdelno") {
+      pendingCmDel = null; renderList();
+    } else if (act === "cmdelok") {
+      if (cmBusy) return;
+      cmBusy = true; b.disabled = true; status("삭제하는 중입니다…");
+      const res = await call(pre + "delcomment", { id: cid });
+      cmBusy = false; pendingCmDel = null;
+      if (!res.ok) { renderList(); fail(res); return; }
+      applied(res, "댓글을 삭제했습니다.");
+    }
+  }
+  // 참여자: 내 일지의 댓글 전체를 불러옴. 서버가 아직 댓글을 지원하지 않으면 댓글 영역만 숨기고 나머지는 그대로 동작
+  async function loadComments(silent) {
+    if (!session || staff) return;
+    const res = await call("comments", {}, true);
+    if (!session || staff) return;
+    if (!res.ok) { if (res.error !== "NETWORK") { cmEnabled = DEMO; } return; }
+    const list = res.comments || [], changed = JSON.stringify(list) !== JSON.stringify(comments), was = cmEnabled;
+    comments = list; cmEnabled = true; lastCmLoad = Date.now(); renderNewBadge();
+    const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches("#list textarea");
+    if ((changed || !was || !silent) && !(silent && typing)) renderList();
+  }
+  document.addEventListener("visibilitychange", () => { // 다른 화면에 갔다 돌아오면 새 댓글 확인
+    if (document.visibilityState !== "visible" || !session || Date.now() - lastCmLoad < 30000) return;
+    lastCmLoad = Date.now();
+    if (staff) staffLoad(true); else if (cmEnabled) loadComments(true);
+  });
+
+  /* ---------- 담당자 모드 ---------- */
+  $("btnStaffOpen").addEventListener("click", () => { status(""); $("login").classList.add("hidden"); $("staffLogin").classList.remove("hidden"); $("sName").focus(); });
+  $("btnStaffBack").addEventListener("click", () => { status(""); $("staffLogin").classList.add("hidden"); $("login").classList.remove("hidden"); $("inName").focus(); });
+  $("staffForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = $("sName").value.trim(), pw = $("sPw").value;
+    if (!name) { status("담당자 성명을 입력해 주세요.", "err"); $("sName").focus(); return; }
+    if (!pw) { status("담당자 비밀번호를 입력해 주세요.", "err"); $("sPw").focus(); return; }
+    $("btnStaffLogin").disabled = true; status("확인하는 중입니다…");
+    staff = { name, pw, list: [], pick: "" }; session = { name, goals: [], timings: [], staff: true };
+    const res = await call("staff_login");
+    $("btnStaffLogin").disabled = false;
+    if (!res.ok) { staff = null; session = null; $("sPw").value = ""; status(MSG[res.error] || MSG.SERVER, "err"); $("sPw").focus(); return; }
+    $("sPw").value = ""; $("sName").value = "";
+    staff.list = res.participants || [];
+    enterStaff();
+  });
+  function renderPick() {
+    $("sPick").innerHTML = '<option value="">참여자를 선택해 주세요</option>' + staff.list.map((p) =>
+      '<option value="' + esc(p.name) + '">' + esc(p.name) + (p.unread ? " (새 댓글 " + p.unread + ")" : "") + "</option>").join("");
+    $("sPick").value = staff.pick;
+  }
+  function enterStaff() {
+    $("staffLogin").classList.add("hidden"); $("login").classList.add("hidden"); $("app").classList.remove("hidden"); $("btnLogout").classList.remove("hidden");
+    $("formCard").classList.add("hidden"); $("staffBar").classList.remove("hidden");
+    $("who").textContent = staff.name + " 담당자"; status("");
+    cmEnabled = true; comments = []; records = [];
+    $("recTitleText").textContent = "참여자 활동 기록"; renderPick(); setRecords([]); renderNewBadge();
+    $("sPick").focus();
+  }
+  $("sPick").addEventListener("change", () => {
+    staff.pick = $("sPick").value; openLogs = new Set(); drafts = {}; editingCm = null; pendingCmDel = null; comments = []; records = [];
+    $("recTitleText").textContent = staff.pick ? staff.pick + " 님의 활동 기록" : "참여자 활동 기록";
+    setRecords([]); renderNewBadge();
+    if (staff.pick) staffLoad(false);
+  });
+  async function staffLoad(silent) {
+    if (!staff || !staff.pick) return;
+    const picked = staff.pick;
+    if (!silent) status("불러오는 중입니다…");
+    const res = await call("staff_records");
+    if (!staff || staff.pick !== picked) return;
+    if (!res.ok) { if (!silent) status(MSG[res.error] || MSG.SERVER, "err"); return; }
+    lastCmLoad = Date.now();
+    const cms = res.comments || [];
+    const changed = JSON.stringify(res.records) !== JSON.stringify(records) || JSON.stringify(cms) !== JSON.stringify(comments);
+    if (silent && !changed) return;
+    const typing = document.activeElement && document.activeElement.matches && document.activeElement.matches("#list textarea");
+    if (!silent) status("");
+    primeThumbs(res.thumbs);
+    comments = cms;
+    if (silent) { records = res.records || []; if (!typing) renderList(); renderNewBadge(); }
+    else { setRecords(res.records); renderNewBadge(); }
+  }
 
   if (DEMO) $("demoBanner").classList.remove("hidden");
   tryResume();
