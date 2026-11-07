@@ -250,6 +250,8 @@
     }
     const recs = mine();
     if (b.action === "photo") return demoDB.photos[b.id] ? { ok: true, mime: "image/jpeg", data: demoDB.photos[b.id] } : { ok: false, error: "BAD_REQUEST" };
+    if (b.action === "photos") return { ok: true, mime: "image/jpeg", photos: {} };
+    if (b.action === "savethumb") return { ok: true };
     const out = { ok: true, name: me, goals: glu ? demoDB.goals : demoDB.goals2, timings: ["공복", "식전", "식후"], records: recs };
     if (b.action === "login" && b.remember && !b.token) out.token = "demo-" + me; // 체험 모드용 가짜 열쇠
     return out;
@@ -298,7 +300,7 @@
   }
   function leaveApp(msg, kind) {
     session = null; records = []; clearPhotoUI();
-    photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear();
+    photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear(); wantImgs = []; legacyQueue = []; thumbUploads.length = 0;
     $("list").innerHTML = ""; $("app").classList.add("hidden"); $("btnLogout").classList.add("hidden");
     $("login").classList.remove("hidden"); $("who").textContent = "";
     status(msg, kind); $("inName").focus();
@@ -358,7 +360,12 @@
     c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
     if (bmp.close) bmp.close();
     const url = c.toDataURL("image/jpeg", 0.85);
-    return { b64: url.split(",")[1], url };
+    const k = Math.min(1, 320 / Math.max(c.width, c.height));
+    const t = document.createElement("canvas");
+    t.width = Math.max(1, Math.round(c.width * k)); t.height = Math.max(1, Math.round(c.height * k));
+    t.getContext("2d").drawImage(c, 0, 0, t.width, t.height);
+    const tb = t.toDataURL("image/jpeg", 0.7).split(",")[1];
+    return { b64: url.split(",")[1], url, thumb: tb.length < 45000 ? tb : "" };
   }
   $("fPhotos").addEventListener("change", async (e) => {
     const files = Array.from(e.target.files || []); e.target.value = "";
@@ -402,7 +409,7 @@
       id: wasEdit ? editing.id : undefined, keepPhotos: wasEdit ? keepPhotos : undefined,
       date: $("fDate").value, goals, content: $("fContent").value, feeling: $("fFeeling").value, note: $("fNote").value,
       glucose, timing: glucose ? $("fTiming").value : "",
-      photos: newPhotos.map((p) => ({ data: p.b64 }))
+      photos: newPhotos.map((p) => ({ data: p.b64, thumb: p.thumb }))
     });
     $("btnSave").disabled = false;
     if (!res.ok) { status(MSG[res.error] || MSG.SERVER, "err"); return; }
@@ -479,58 +486,104 @@
       setRecords(res.records); status("삭제했습니다.", "ok");
     }
   });
-  /* 사진 불러오기: 화면에 보이는 사진만, 동시에 3장씩, 목록에는 작은 사진(thumb)만.
-     서버가 size 값을 모르는 예전 버전이어도 원래 사진을 그대로 돌려주므로 그대로 동작합니다. */
-  const MAX_PARALLEL = 3;
-  const photoInflight = new Map();
-  let photoRunning = 0;
-  const photoQueue = [];
-  function pumpPhotos() {
-    while (photoRunning < MAX_PARALLEL && photoQueue.length) { photoRunning++; photoQueue.shift()(); }
+  /* 사진 불러오기
+     1) 화면에 보이는 사진의 작은 사진(썸네일)을 서버에 한 번에 모아서 요청합니다.
+     2) 작은 사진이 아직 없는 예전 사진은 원본을 한 장씩 받아 보여 주고, 이 기기에서 작은 사진을
+        만들어 서버에 한 번만 저장해 둡니다. (그다음부터는 빠르게 뜹니다) */
+  const BATCH = 12;
+  let wantImgs = [];            // 사진이 필요한 <img>
+  let flushTimer = 0, flushing = false;
+  let legacyQueue = [], legacyRunning = false;
+  const thumbUploads = [];      // 서버에 저장할 작은 사진 { id, b64 }
+  function b64ToUrl(b64, mime) { const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); return URL.createObjectURL(new Blob([bytes], { type: mime })); }
+  function showId(id, url) {
+    document.querySelectorAll('img[data-id="' + CSS.escape(id) + '"]').forEach((i) => { if (i.isConnected) i.src = url; });
   }
-  function fetchPhoto(id, size) {
-    const key = size + ":" + id;
-    if (photoCache.has(key)) return Promise.resolve(photoCache.get(key));
-    if (photoInflight.has(key)) return photoInflight.get(key);
-    const p = new Promise((resolve) => {
-      photoQueue.push(async () => {
-        try {
-          if (!session) return resolve(null);
-          const res = await call("photo", { id, size });
-          if (!res.ok) return resolve(null);
-          const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([bytes], { type: res.mime }));
-          photoCache.set(key, url);
-          resolve(url);
-        } catch (e) { resolve(null); }
-        finally { photoInflight.delete(key); photoRunning--; pumpPhotos(); }
-      });
-      pumpPhotos();
-    });
-    photoInflight.set(key, p);
-    return p;
+  function failId(id) {
+    document.querySelectorAll('img[data-id="' + CSS.escape(id) + '"]').forEach((i) => { if (!/불러오지 못함/.test(i.alt)) i.alt += " (불러오지 못함)"; });
   }
-  async function showPhoto(img, size) {
-    const url = await fetchPhoto(img.dataset.id, size);
-    if (!img.isConnected) return;
-    if (url) img.src = url;
-    else if (!/불러오지 못함/.test(img.alt)) img.alt += " (불러오지 못함)";
+  function needPhoto(img) {
+    const key = "t:" + img.dataset.id;
+    if (photoCache.has(key)) { img.src = photoCache.get(key); return; }
+    wantImgs.push(img);
+    clearTimeout(flushTimer); flushTimer = setTimeout(flushPhotos, 150);
+  }
+  async function flushPhotos() {
+    if (flushing) { flushTimer = setTimeout(flushPhotos, 300); return; }
+    flushing = true;
+    try {
+      while (wantImgs.length) {
+        const ids = Array.from(new Set(wantImgs.splice(0).filter((i) => i.isConnected).map((i) => i.dataset.id))).filter((id) => !photoCache.has("t:" + id));
+        for (let k = 0; k < ids.length; k += BATCH) {
+          if (!session) return;
+          const part = ids.slice(k, k + BATCH);
+          const res = await call("photos", { ids: part });
+          const got = res && res.ok && res.photos ? res.photos : {};
+          part.forEach((id) => {
+            if (got[id]) { const u = b64ToUrl(got[id], "image/jpeg"); photoCache.set("t:" + id, u); showId(id, u); }
+            else if (legacyQueue.indexOf(id) < 0) legacyQueue.push(id);
+          });
+        }
+      }
+    } finally { flushing = false; }
+    runLegacy();
+  }
+  async function makeThumb(b64, mime) {
+    try {
+      const bmp = await createImageBitmap(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: mime }));
+      const k = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      if (bmp.close) bmp.close();
+      const out = c.toDataURL("image/jpeg", 0.7).split(",")[1];
+      return out.length < 45000 ? out : "";
+    } catch (e) { return ""; }
+  }
+  async function runLegacy() {
+    if (legacyRunning) return;
+    legacyRunning = true;
+    try {
+      while (legacyQueue.length && session) {
+        while ((flushing || wantImgs.length) && session) await new Promise((r) => setTimeout(r, 300)); // 새로 보이는 사진의 요청을 먼저 처리
+        if (!legacyQueue.length) break;
+        const id = legacyQueue.shift();
+        if (photoCache.has("t:" + id)) continue;
+        const res = await call("photo", { id });
+        if (!res || !res.ok) { failId(id); continue; }
+        const u = b64ToUrl(res.data, res.mime);
+        photoCache.set("t:" + id, u); photoCache.set("f:" + id, u);
+        showId(id, u);
+        const tb = await makeThumb(res.data, res.mime);
+        if (tb) thumbUploads.push({ id, b64: tb });
+      }
+    } finally { legacyRunning = false; }
+    while (thumbUploads.length && session && !legacyRunning && !flushing) {
+      const t = thumbUploads.shift();
+      await call("savethumb", { id: t.id, thumb: t.b64 });
+    }
   }
   const photoObserver = "IntersectionObserver" in window
     ? new IntersectionObserver((entries) => {
-        entries.forEach((en) => { if (en.isIntersecting) { photoObserver.unobserve(en.target); showPhoto(en.target, "thumb"); } });
+        entries.forEach((en) => { if (en.isIntersecting) { photoObserver.unobserve(en.target); needPhoto(en.target); } });
       }, { rootMargin: "300px" })
     : null;
   function loadPhotos(sel) {
     document.querySelectorAll(sel).forEach((img) => {
-      if (photoObserver) photoObserver.observe(img); else showPhoto(img, "thumb");
+      if (photoObserver) photoObserver.observe(img); else needPhoto(img);
     });
   }
   async function toggleBig(img) {
     if (img.classList.contains("big")) { img.classList.remove("big"); return; }
     if (!img.src) return;
     img.classList.add("big");
-    if (!img.dataset.full) { img.dataset.full = "1"; await showPhoto(img, "full"); }
+    const id = img.dataset.id;
+    if (!photoCache.has("f:" + id)) {
+      photoCache.set("f:" + id, "");
+      const res = await call("photo", { id });
+      if (res && res.ok) { const u = b64ToUrl(res.data, res.mime); photoCache.set("f:" + id, u); if (img.isConnected && img.classList.contains("big")) img.src = u; }
+      else photoCache.delete("f:" + id);
+    } else if (photoCache.get("f:" + id) && img.classList.contains("big")) img.src = photoCache.get("f:" + id);
   }
   $("list").addEventListener("click", (e) => { const i = e.target.closest("img[data-id]"); if (i) toggleBig(i); });
   $("list").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("img[data-id]")) { e.preventDefault(); toggleBig(e.target); } });
