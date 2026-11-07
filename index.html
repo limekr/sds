@@ -170,17 +170,6 @@
           <label for="fFeeling">활동소감</label>
           <textarea id="fFeeling" maxlength="3000"></textarea>
         </div>
-        <fieldset id="glucoseBox" class="hidden">
-          <legend>혈당 기록 <span class="hint">(혈당 확인 목표를 선택했을 때, 측정한 경우에만)</span></legend>
-          <div class="field">
-            <label for="fGlucose">혈당 수치 (mg/dL)</label>
-            <input id="fGlucose" type="text" inputmode="numeric" pattern="\d{2,3}" maxlength="3" autocomplete="off">
-          </div>
-          <div class="field" style="margin-bottom:0">
-            <label for="fTiming">측정 시점</label>
-            <select id="fTiming"></select>
-          </div>
-        </fieldset>
         <div class="field">
           <label for="fPhotos">사진 <span class="hint">(최대 3장)</span></label>
           <input id="fPhotos" type="file" accept="image/*" multiple>
@@ -538,15 +527,15 @@
     box.innerHTML = goals.map((g, i) =>
       '<label class="check" for="goal' + i + '"><input type="radio" id="goal' + i + '" name="goal" value="' + esc(g) + '"><span>' + esc(g) + "</span></label>").join("");
   }
-  // '혈당'이 들어간 참여목표를 선택했을 때만 혈당 입력칸을 보여 줍니다
+  // '혈당'이 들어간 참여목표를 선택하면 활동내용에 혈당 기록 양식을 자동으로 넣어 줍니다
+  const GLUCOSE_TEMPLATE = "공복  / 식후  ()";
   function glucoseOn() {
     return Array.from(document.querySelectorAll('input[name="goal"]:checked')).some((c) => c.value.indexOf("혈당") >= 0);
   }
   function renderGlucose() {
-    $("fTiming").innerHTML = session.timings.map((t) => "<option>" + esc(t) + "</option>").join("");
-    const on = glucoseOn();
-    $("glucoseBox").classList.toggle("hidden", !on);
-    if (!on) $("fGlucose").value = "";
+    const box = $("fContent"), v = box.value.trim();
+    if (glucoseOn()) { if (!v) box.value = GLUCOSE_TEMPLATE; }
+    else if (v === GLUCOSE_TEMPLATE.trim()) box.value = "";
   }
   $("goalList").addEventListener("change", renderGlucose);
   function setEditUI(on) {
@@ -560,7 +549,6 @@
   function resetForm() {
     if (editing) { editing = null; renderGoals(); }
     setEditUI(false);
-    $("fGlucose").value = "";
     $("fDate").value = today(); $("fContent").value = ""; $("fFeeling").value = ""; $("fNote").value = "";
     document.querySelectorAll('input[name="goal"]').forEach((c) => (c.checked = false));
     renderGlucose(); clearPhotoUI();
@@ -613,17 +601,12 @@
     const goals = Array.from(document.querySelectorAll('input[name="goal"]:checked')).map((c) => c.value);
     if (!goals.length) { status("참여목표를 선택해 주세요.", "err"); const f = document.querySelector('input[name="goal"]'); if (f) f.focus(); return; }
     if (!$("fContent").value.trim()) { status("활동내용을 적어 주세요.", "err"); $("fContent").focus(); return; }
-    let glucose = "";
-    if (glucoseOn()) {
-      glucose = $("fGlucose").value.trim();
-      if (glucose && (!/^\d{2,3}$/.test(glucose) || +glucose < 20 || +glucose > 600)) { status("혈당 수치는 20에서 600 사이 숫자로 적어 주세요.", "err"); $("fGlucose").focus(); return; }
-    }
     $("btnSave").disabled = true; status("저장하는 중입니다. 사진이 있으면 조금 걸릴 수 있어요…");
     const wasEdit = !!editing;
     const res = await call(wasEdit ? "update" : "add", {
       id: wasEdit ? editing.id : undefined, keepPhotos: wasEdit ? keepPhotos : undefined,
       date: $("fDate").value, goals, content: $("fContent").value, feeling: $("fFeeling").value, note: $("fNote").value,
-      glucose, timing: glucose ? $("fTiming").value : "",
+      glucose: "", timing: "",
       photos: newPhotos.map((p) => ({ data: p.b64, thumb: p.thumb }))
     });
     $("btnSave").disabled = false;
@@ -656,7 +639,6 @@
       r.goals.map((g) => '<span class="tag">' + esc(g) + "</span>").join("") + "</div>" +
       '<p><span class="lbl">활동내용</span>' + esc(r.content) + "</p>" +
       (r.feeling ? '<p><span class="lbl">활동소감</span>' + esc(r.feeling) + "</p>" : "") +
-      (r.glucose != null ? '<p><span class="lbl">혈당</span>' + esc(r.glucose) + " mg/dL" + (r.timing ? " (" + esc(r.timing) + ")" : "") + "</p>" : "") +
       (r.note ? '<p><span class="lbl">비고</span>' + esc(r.note) + "</p>" : "") +
       (r.photos.length ? '<div class="photos">' + r.photos.map((id, i) => '<img data-id="' + esc(id) + '" alt="' + esc(r.date) + ' 활동 사진 ' + (i + 1) + '" tabindex="0">').join("") + "</div>" : "") +
       (staff ? "" : actionsHtml(r)) + commentsHtml(r) + "</article>"
@@ -680,8 +662,6 @@
     const first = Array.from(document.querySelectorAll('input[name="goal"]')).find((c) => r.goals.indexOf(c.value) >= 0);
     if (first) first.checked = true;
     $("fDate").value = r.date; $("fContent").value = r.content; $("fFeeling").value = r.feeling || ""; $("fNote").value = r.note || "";
-    renderGlucose();
-    if (r.glucose != null) { $("fGlucose").value = r.glucose; if (r.timing) $("fTiming").value = r.timing; }
     newPhotos = []; keepPhotos = r.photos.slice(); renderPreviews();
     setEditUI(true); status(""); renderList();
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").scrollIntoView({ behavior: "smooth", block: "start" }); $("addTitle").focus();
