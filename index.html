@@ -14,7 +14,7 @@
   body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.6 -apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif; }
   header { background:var(--brand); color:var(--brand-ink); margin:0 0 16px; }
   .hero-in { max-width:760px; margin:0 auto; padding:14px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  .hero-icon { width:52px; height:52px; flex:none; }
+  .hero-logo { width:60px; height:60px; flex:none; background:#fff; border-radius:12px; padding:5px; object-fit:contain; display:block; }
   .hero-text { flex:1 1 220px; min-width:0; }
   .hero-sub { margin:0; font-size:.95rem; font-weight:600; }
   .hero-act { margin-left:auto; }
@@ -87,13 +87,7 @@
 <body>
 <header>
   <div class="hero-in">
-    <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false" fill="currentColor">
-      <circle cx="32" cy="32" r="31" opacity=".2"/>
-      <ellipse cx="21" cy="44" rx="6.5" ry="9.5"/>
-      <circle cx="15.5" cy="31" r="2.6"/><circle cx="20.5" cy="28.5" r="2.6"/><circle cx="25.8" cy="29" r="2.6"/><circle cx="29.5" cy="32" r="2.4"/>
-      <ellipse cx="43" cy="30" rx="6.5" ry="9.5"/>
-      <circle cx="37.5" cy="17" r="2.6"/><circle cx="42.5" cy="14.5" r="2.6"/><circle cx="47.8" cy="15" r="2.6"/><circle cx="51.5" cy="18" r="2.4"/>
-    </svg>
+    <img class="hero-logo" src="data:image/png;base64,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" alt="동대문시각특화장애인복지관 로고" width="54" height="50">
     <div class="hero-text">
       <h1>내가 정하는 한 걸음</h1>
       <p class="hero-sub">자기주도지원 활동일지</p>
