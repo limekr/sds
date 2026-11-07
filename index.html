@@ -76,6 +76,7 @@
         <label for="inPhone">전화번호 뒷자리 4자리 <span class="hint">(숫자 4개)</span></label>
         <input id="inPhone" type="tel" inputmode="numeric" pattern="\d{4}" maxlength="4" autocomplete="off" required>
       </div>
+      <label class="check" for="inRemember"><input type="checkbox" id="inRemember" checked><span>이 기기에서 계속 로그인 <span class="hint">(다음부터 자동으로 들어옵니다. 공용 기기에서는 꺼 주세요)</span></span></label>
       <button class="primary" type="submit" id="btnLogin">들어가기</button>
     </form>
   </section>
@@ -147,6 +148,7 @@
   const MSG = {
     AUTH: "성명 또는 전화번호 뒷자리가 맞지 않습니다. 다시 확인해 주세요.",
     LOCKED: "여러 번 맞지 않아 잠시 쉬어갑니다. 약 10분 뒤에 다시 시도해 주세요.",
+    TOKEN: "자동 입장이 만료되었습니다. 성명과 전화번호 뒷자리로 다시 입장해 주세요.",
     BAD_REQUEST: "입력한 내용을 확인해 주세요.",
     SERVER: "일시적인 오류가 있습니다. 잠시 후 다시 시도해 주세요.",
     NETWORK: "인터넷 연결을 확인해 주세요."
@@ -160,14 +162,27 @@
   function status(msg, kind) { const el = $("status"); el.textContent = msg || ""; el.className = kind || ""; }
   function today() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
 
+  /* ---------- 이 기기 자동 입장용 열쇠 (브라우저 저장소) ---------- */
+  const TOKEN_KEY = "sdsDeviceToken";
+  function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+  function saveToken(t) { try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
+  function forgetToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
   /* ---------- 서버 호출 ---------- */
-  async function call(action, payload) {
-    const body = Object.assign({ action, name: session.name, phone4: session.phone4 }, payload || {});
-    if (DEMO) return demo(body);
-    try {
-      const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
-      return await r.json();
-    } catch (e) { return { ok: false, error: "NETWORK" }; }
+  async function call(action, payload, keepOnTokenError) {
+    const cred = session.token ? { token: session.token } : { name: session.name, phone4: session.phone4 };
+    const body = Object.assign({ action }, cred, payload || {});
+    let res;
+    if (DEMO) res = await demo(body);
+    else {
+      try {
+        const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+        res = await r.json();
+      } catch (e) { res = { ok: false, error: "NETWORK" }; }
+    }
+    // 입장 중에 열쇠가 해제된 경우(담당자가 기기를 해제했거나 기간 만료) 처음 화면으로 돌려보냄
+    if (!res.ok && res.error === "TOKEN" && !keepOnTokenError && session && session.token) { forgetToken(); leaveApp(MSG.TOKEN, "err"); }
+    return res;
   }
 
   /* ---------- 체험 모드(서버 대역) ---------- */
@@ -178,12 +193,20 @@
       { owner: "김철수", date: "2026-10-20", goals: ["식재료 장보기"], content: "마트 동행 장보기.", feeling: "", photos: [], note: "", glucose: null, timing: "" }
     ] };
   async function demo(b) {
-    const nn = String(b.name).replace(/\s+/g, "");
-    if (demoDB.fails >= 10) return { ok: false, error: "LOCKED" };
-    const glu = nn === "홍길동" && b.phone4 === "1234", plain = nn === "김철수" && b.phone4 === "5678"; // 김철수는 혈당 항목이 없는 사람
-    if (!glu && !plain) { demoDB.fails++; return { ok: false, error: "AUTH" }; }
-    demoDB.fails = 0;
-    const me = glu ? "홍길동" : "김철수", recs = demoDB.records.filter((r) => r.owner === me);
+    let me;
+    if (b.token) {
+      me = b.token === "demo-홍길동" ? "홍길동" : b.token === "demo-김철수" ? "김철수" : null;
+      if (!me) return { ok: false, error: "TOKEN" };
+    } else {
+      const nn = String(b.name).replace(/\s+/g, "");
+      if (demoDB.fails >= 10) return { ok: false, error: "LOCKED" };
+      const hong = nn === "홍길동" && b.phone4 === "1234", kim = nn === "김철수" && b.phone4 === "5678"; // 김철수는 혈당 항목이 없는 사람
+      if (!hong && !kim) { demoDB.fails++; return { ok: false, error: "AUTH" }; }
+      demoDB.fails = 0;
+      me = hong ? "홍길동" : "김철수";
+    }
+    const glu = me === "홍길동", recs = demoDB.records.filter((r) => r.owner === me);
+    if (b.action === "logout") return { ok: true };
     if (b.action === "add") {
       if ((b.photos || []).length > 3) return { ok: false, error: "BAD_REQUEST" };
       if (b.glucose && !(b.goals || []).some((g) => g.indexOf("혈당") >= 0)) return { ok: false, error: "BAD_REQUEST" };
@@ -192,7 +215,9 @@
       demoDB.records.unshift(rec); recs.unshift(rec);
     }
     if (b.action === "photo") return demoDB.photos[b.id] ? { ok: true, mime: "image/jpeg", data: demoDB.photos[b.id] } : { ok: false, error: "BAD_REQUEST" };
-    return { ok: true, name: me, goals: glu ? demoDB.goals : demoDB.goals2, timings: ["공복", "식전", "식후"], records: recs };
+    const out = { ok: true, name: me, goals: glu ? demoDB.goals : demoDB.goals2, timings: ["공복", "식전", "식후"], records: recs };
+    if (b.action === "login" && b.remember && !b.token) out.token = "demo-" + me; // 체험 모드용 가짜 열쇠
+    return out;
   }
 
   /* ---------- 로그인 ---------- */
@@ -203,13 +228,31 @@
     if (!/^\d{4}$/.test(phone4)) { status("전화번호 뒷자리 숫자 4개를 입력해 주세요.", "err"); $("inPhone").focus(); return; }
     $("btnLogin").disabled = true; status("확인하는 중입니다…");
     session = { name, phone4, goals: [] };
-    const res = await call("login");
+    const res = await call("login", { remember: $("inRemember").checked });
     $("btnLogin").disabled = false;
     if (!res.ok) { session = null; $("inPhone").value = ""; status(MSG[res.error] || MSG.SERVER, "err"); return; }
-    session = { name: res.name, phone4, goals: res.goals, timings: res.timings || [] };
+    if (res.token) {
+      saveToken(res.token); // 이후로는 뒷자리 대신 기기 열쇠만 사용 (뒷자리는 기기에 남기지 않음)
+      session = { token: res.token, name: res.name, goals: res.goals, timings: res.timings || [] };
+    } else {
+      session = { name: res.name, phone4, goals: res.goals, timings: res.timings || [] };
+    }
     $("inName").value = ""; $("inPhone").value = "";
     enterApp(res.records);
   });
+
+  /* 이 기기에서 저장된 열쇠가 있으면 자동 입장 */
+  async function tryResume() {
+    const t = getToken();
+    if (!t) return;
+    $("login").classList.add("hidden"); status("자동으로 들어가는 중입니다…");
+    session = { token: t, goals: [] };
+    const res = await call("resume", {}, true);
+    if (res.ok) { session = { token: t, name: res.name, goals: res.goals, timings: res.timings || [] }; enterApp(res.records); return; }
+    session = null; $("login").classList.remove("hidden");
+    if (res.error === "TOKEN") { forgetToken(); status(MSG.TOKEN, "err"); }
+    else status(MSG[res.error] || MSG.SERVER, "err"); // 인터넷 문제 등은 열쇠를 지우지 않음
+  }
 
   function enterApp(recs) {
     $("login").classList.add("hidden"); $("app").classList.remove("hidden"); $("btnLogout").classList.remove("hidden");
@@ -218,12 +261,21 @@
     renderGoals(); renderGlucose(); resetForm(); setRecords(recs);
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").focus();
   }
-  $("btnLogout").addEventListener("click", () => {
+  function leaveApp(msg, kind) {
     session = null; records = []; clearPhotoUI();
     photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear();
     $("list").innerHTML = ""; $("app").classList.add("hidden"); $("btnLogout").classList.add("hidden");
     $("login").classList.remove("hidden"); $("who").textContent = "";
-    status("나왔습니다.", "ok"); $("inName").focus();
+    status(msg, kind); $("inName").focus();
+  }
+  $("btnLogout").addEventListener("click", async () => {
+    $("btnLogout").disabled = true;
+    if (session && session.token) { // 서버에서도 이 기기의 열쇠를 해제 (최대 4초 대기)
+      await Promise.race([call("logout", {}, true), new Promise((r) => setTimeout(r, 4000))]);
+    }
+    forgetToken();
+    $("btnLogout").disabled = false;
+    leaveApp("나왔습니다.", "ok");
   });
 
   /* ---------- 작성 폼 ---------- */
@@ -351,6 +403,7 @@
   $("list").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("img[data-id]")) { e.preventDefault(); e.target.classList.toggle("big"); } });
 
   if (DEMO) $("demoBanner").classList.remove("hidden");
+  tryResume();
 })();
 </script>
 </body>
