@@ -479,22 +479,61 @@
       setRecords(res.records); status("삭제했습니다.", "ok");
     }
   });
-  async function loadPhotos(sel) {
-    const imgs = Array.from(document.querySelectorAll(sel));
-    for (const img of imgs) {
-      const id = img.dataset.id;
-      if (!photoCache.has(id)) {
-        if (!session) return;
-        const res = await call("photo", { id });
-        if (!res.ok) { img.alt += " (불러오지 못함)"; continue; }
-        const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
-        photoCache.set(id, URL.createObjectURL(new Blob([bytes], { type: res.mime })));
-      }
-      img.src = photoCache.get(id);
-    }
+  /* 사진 불러오기: 화면에 보이는 사진만, 동시에 3장씩, 목록에는 작은 사진(thumb)만.
+     서버가 size 값을 모르는 예전 버전이어도 원래 사진을 그대로 돌려주므로 그대로 동작합니다. */
+  const MAX_PARALLEL = 3;
+  const photoInflight = new Map();
+  let photoRunning = 0;
+  const photoQueue = [];
+  function pumpPhotos() {
+    while (photoRunning < MAX_PARALLEL && photoQueue.length) { photoRunning++; photoQueue.shift()(); }
   }
-  $("list").addEventListener("click", (e) => { const i = e.target.closest("img[data-id]"); if (i && i.src) i.classList.toggle("big"); });
-  $("list").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("img[data-id]")) { e.preventDefault(); e.target.classList.toggle("big"); } });
+  function fetchPhoto(id, size) {
+    const key = size + ":" + id;
+    if (photoCache.has(key)) return Promise.resolve(photoCache.get(key));
+    if (photoInflight.has(key)) return photoInflight.get(key);
+    const p = new Promise((resolve) => {
+      photoQueue.push(async () => {
+        try {
+          if (!session) return resolve(null);
+          const res = await call("photo", { id, size });
+          if (!res.ok) return resolve(null);
+          const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], { type: res.mime }));
+          photoCache.set(key, url);
+          resolve(url);
+        } catch (e) { resolve(null); }
+        finally { photoInflight.delete(key); photoRunning--; pumpPhotos(); }
+      });
+      pumpPhotos();
+    });
+    photoInflight.set(key, p);
+    return p;
+  }
+  async function showPhoto(img, size) {
+    const url = await fetchPhoto(img.dataset.id, size);
+    if (!img.isConnected) return;
+    if (url) img.src = url;
+    else if (!/불러오지 못함/.test(img.alt)) img.alt += " (불러오지 못함)";
+  }
+  const photoObserver = "IntersectionObserver" in window
+    ? new IntersectionObserver((entries) => {
+        entries.forEach((en) => { if (en.isIntersecting) { photoObserver.unobserve(en.target); showPhoto(en.target, "thumb"); } });
+      }, { rootMargin: "300px" })
+    : null;
+  function loadPhotos(sel) {
+    document.querySelectorAll(sel).forEach((img) => {
+      if (photoObserver) photoObserver.observe(img); else showPhoto(img, "thumb");
+    });
+  }
+  async function toggleBig(img) {
+    if (img.classList.contains("big")) { img.classList.remove("big"); return; }
+    if (!img.src) return;
+    img.classList.add("big");
+    if (!img.dataset.full) { img.dataset.full = "1"; await showPhoto(img, "full"); }
+  }
+  $("list").addEventListener("click", (e) => { const i = e.target.closest("img[data-id]"); if (i) toggleBig(i); });
+  $("list").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("img[data-id]")) { e.preventDefault(); toggleBig(e.target); } });
 
   if (DEMO) $("demoBanner").classList.remove("hidden");
   tryResume();
