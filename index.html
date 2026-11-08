@@ -320,14 +320,19 @@
     let res;
     if (DEMO) res = await demo(body);
     else {
-      const ctl = new AbortController();
-      const limit = /^(add|update|audioSave)$/.test(action) ? 120000 : 30000; // 올리기·저장은 오래 걸릴 수 있어 더 길게
-      const timer = setTimeout(() => ctl.abort(), limit);
-      try {
-        const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), signal: ctl.signal });
-        res = await r.json();
-      } catch (e) { res = { ok: false, error: e && e.name === "AbortError" ? "TIMEOUT" : "NETWORK" }; }
-      finally { clearTimeout(timer); }
+      // 조회만 하는 요청은 응답이 없으면 한 번 더 시도(서버가 가끔 요청을 놓칠 때 대비). 저장·삭제 등은 중복 처리를 막기 위해 다시 보내지 않음
+      const readOnly = /^(login|resume|comments|readcomments|staff_login|staff_records|photo|photos|audioGet|staff_audioget)$/.test(action);
+      const limit = /^(add|update|audioSave)$/.test(action) ? 120000 : readOnly ? 15000 : 30000; // 올리기·저장은 오래 걸릴 수 있어 더 길게
+      for (let attempt = 0; attempt < (readOnly ? 2 : 1); attempt++) {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), limit);
+        try {
+          const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), signal: ctl.signal });
+          res = await r.json();
+        } catch (e) { res = { ok: false, error: e && e.name === "AbortError" ? "TIMEOUT" : "NETWORK" }; }
+        finally { clearTimeout(timer); }
+        if (res.ok || (res.error !== "TIMEOUT" && res.error !== "NETWORK")) break;
+      }
     }
     if (!res.ok && typeof res.error === "string" && res.error.indexOf("BAD_REQUEST") === 0) { res.detail = res.error.split(":")[1] || ""; res.error = "BAD_REQUEST"; } // 세부 사유가 붙은 오류도 같은 안내문으로(사유는 detail에 보관)
     // 입장 중에 열쇠가 해제된 경우(담당자가 기기를 해제했거나 기간 만료) 처음 화면으로 돌려보냄
