@@ -87,6 +87,11 @@
   .cm-item .actions { margin-top:8px; }
   .cm-item .actions button, .cm-form .actions button { min-height:40px; padding:6px 14px; font-size:.95rem; }
   .cm-form textarea, .cm-item textarea { min-height:80px; }
+  .audio-box { margin-top:10px; }
+  .audio-box audio, .audio-prev audio { width:100%; display:block; margin-top:6px; }
+  .audio-prev { margin-top:10px; }
+  .audio-prev .row { margin-top:6px; }
+  button.rec-on { border-color:var(--warn); color:var(--warn); font-weight:700; }
 </style>
 </head>
 <body>
@@ -175,6 +180,13 @@
           <input id="fPhotos" type="file" accept="image/*" multiple>
           <div id="previews" class="previews"></div>
         </div>
+        <div class="field" id="audioField">
+          <label for="fAudio">음성 <span class="hint">(1개 · 3분 이내 · 5MB 이내)</span></label>
+          <p class="hint" style="margin:0 0 8px">음성 메모, 인터뷰, 연주 녹음 등을 올릴 수 있습니다. 파일을 고르거나 '녹음하기'로 바로 녹음하세요. 다른 사람의 목소리가 들어 있다면 그 분의 동의를 받은 녹음만 올려 주세요.</p>
+          <input id="fAudio" type="file" accept="audio/*">
+          <div class="row" id="recRow" style="margin-top:10px"><button type="button" id="btnRec" aria-pressed="false">녹음하기</button><span id="recInfo" class="hint"></span></div>
+          <div id="audioPrev"></div>
+        </div>
         <div class="field">
           <label for="fNote">비고 <span class="hint">(선택)</span></label>
           <input id="fNote" type="text" maxlength="3000">
@@ -203,7 +215,7 @@
 (function () {
   "use strict";
   const DEMO = !window.APP_CONFIG || !window.APP_CONFIG.API_URL;
-  const MAX_PHOTOS = 3, PAGE = 10, MAX_EDGE = 1280;
+  const MAX_PHOTOS = 3, PAGE = 10, MAX_EDGE = 1280, MAX_AUDIO_SECS = 180, MAX_AUDIO_BYTES = 5 * 1024 * 1024;
   const $ = (id) => document.getElementById(id);
   const MSG = {
     AUTH: "성명 또는 전화번호 뒷자리가 맞지 않습니다. 다시 확인해 주세요.",
@@ -215,6 +227,13 @@
     STAFF_AUTH: "담당자 비밀번호가 맞지 않습니다. 다시 확인해 주세요.",
     STAFF_EXPIRED: "담당자 비밀번호가 바뀌었습니다. 다시 입장해 주세요."
   };
+  const MSG_AUDIO = {
+    AUDIO_LONG: "음성은 3분 이내만 올릴 수 있습니다.",
+    AUDIO_SIZE: "음성 파일이 너무 큽니다. 5MB 이하로 올려 주세요.",
+    AUDIO_TYPE: "지원하지 않는 음성 형식입니다. m4a나 mp3 파일로 올려 주세요.",
+    NOT_FOUND: "기록을 찾을 수 없습니다."
+  };
+  const audioMsg = (res, fb) => MSG_AUDIO[res && res.detail] || (res && MSG[res.error]) || fb;
   let session = null;     // { name, phone4, goals }  (메모리에만 보관)
   let records = [], shown = PAGE;
   let newPhotos = [];     // { b64, url }
@@ -222,6 +241,8 @@
   let editing = null;     // 수정 중인 기록 (없으면 null)
   let pendingDel = null;  // 삭제 확인을 기다리는 기록 id
   const photoCache = new Map();
+  let newAudio = null, audioRemove = false, audioOld = 0;   // 음성: 새로 고른 파일 / 기존 음성 삭제 여부 / 기존 음성 길이(초)
+  const audioCache = new Map();                              // 불러온 음성 (기록 id -> 재생 주소)
   /* 댓글 / 담당자 모드 상태 (모두 메모리에만 보관) */
   let staff = null;       // 담당자 모드: { name, pw, list:[{name,total,unread}], pick }
   let comments = [];      // 현재 화면 대상의 댓글 전체 (서버가 보는 사람 기준으로 isNew, mine을 계산해 줌)
@@ -303,7 +324,7 @@
         res = await r.json();
       } catch (e) { res = { ok: false, error: "NETWORK" }; }
     }
-    if (!res.ok && typeof res.error === "string" && res.error.indexOf("BAD_REQUEST") === 0) res.error = "BAD_REQUEST"; // 세부 사유가 붙은 오류도 같은 안내문으로
+    if (!res.ok && typeof res.error === "string" && res.error.indexOf("BAD_REQUEST") === 0) { res.detail = res.error.split(":")[1] || ""; res.error = "BAD_REQUEST"; } // 세부 사유가 붙은 오류도 같은 안내문으로(사유는 detail에 보관)
     // 입장 중에 열쇠가 해제된 경우(담당자가 기기를 해제했거나 기간 만료) 처음 화면으로 돌려보냄
     if (!res.ok && res.error === "TOKEN" && !keepOnTokenError && session && session.token) { forgetToken(); leaveApp(MSG.TOKEN, "err"); }
     // 담당자 모드 중에 비밀번호가 바뀐 경우
@@ -312,7 +333,7 @@
   }
 
   /* ---------- 체험 모드(서버 대역) ---------- */
-  const demoDB = { goals: ["집에서 간단한 요리 배우기", "식재료 장보기", "혈당 스스로 확인하기"], goals2: ["식재료 장보기", "집에서 간단한 요리 배우기"], fails: 0, photos: {},
+  const demoDB = { goals: ["집에서 간단한 요리 배우기", "식재료 장보기", "혈당 스스로 확인하기"], goals2: ["식재료 장보기", "집에서 간단한 요리 배우기"], fails: 0, photos: {}, audio: {},
     records: [
       { id: "d1", owner: "홍길동", date: "2026-10-28", goals: ["집에서 간단한 요리 배우기"], content: "이웃과 함께 두부 요리를 해 보았다.", feeling: "생각보다 어렵지 않았고 다음에는 국도 끓여 보고 싶다.", photos: [], note: "", glucose: 112, timing: "식후" },
       { id: "d2", owner: "홍길동", date: "2026-10-24", goals: ["식재료 장보기"], content: "동네 마트에서 식재료를 직접 골라 구입했다.", feeling: "필요한 물건을 찾는 데 시간이 걸렸지만 혼자 해냈다.", photos: [], note: "", glucose: null, timing: "" },
@@ -373,7 +394,11 @@
       return { ok: true, participants: owners.map((o) => ({ name: o, total: demoDB.records.filter((r) => r.owner === o).length, unread: demoCmList(o, true, name).filter((c) => c.isNew).length })) };
     }
     if (!demoDB.records.some((r) => r.owner === owner)) return { ok: false, error: "BAD_REQUEST" };
-    if (act === "records") return { ok: true, records: demoDB.records.filter((r) => r.owner === owner), comments: demoCmList(owner, true, name) };
+    if (act === "audioget") {
+      const a = demoDB.audio[b.id], mineRec = demoDB.records.some((r) => r.id === b.id && r.owner === owner);
+      return a && mineRec ? { ok: true, mime: a.mime, data: a.data, secs: a.secs } : { ok: false, error: "BAD_REQUEST:NOT_FOUND" };
+    }
+    if (act === "records") return { ok: true, records: demoDB.records.filter((r) => r.owner === owner).map((r) => Object.assign({}, r, { audio: demoDB.audio[r.id] ? demoDB.audio[r.id].secs : 0 })), comments: demoCmList(owner, true, name) };
     if (b.action === "photos") return { ok: true, photos: {} };
     if (b.action === "photo") return { ok: false, error: "BAD_REQUEST" };
     const r = demoCmAct(Object.assign({}, b, { action: act }), owner, true, name);
@@ -402,9 +427,11 @@
       return true;
     };
     const savePhotos = () => (b.photos || []).map((p, i) => { const id = "demo" + Date.now() + i; demoDB.photos[id] = p.data; return id; });
+    let newDemoId = null;
     if (b.action === "add") {
       if (!checkInput()) return { ok: false, error: "BAD_REQUEST" };
-      demoDB.records.unshift({ id: "demo" + Date.now(), owner: me, date: b.date, goals: b.goals, content: b.content, feeling: b.feeling || "", photos: savePhotos(), note: b.note || "", glucose: b.glucose ? Number(b.glucose) : null, timing: b.timing || "" });
+      newDemoId = "demo" + Date.now();
+      demoDB.records.unshift({ id: newDemoId, owner: me, date: b.date, goals: b.goals, content: b.content, feeling: b.feeling || "", photos: savePhotos(), note: b.note || "", glucose: b.glucose ? Number(b.glucose) : null, timing: b.timing || "" });
     }
     if (b.action === "update") {
       const rec = mine().find((r) => r.id === b.id);
@@ -417,15 +444,32 @@
       const rec = mine().find((r) => r.id === b.id);
       if (!rec) return { ok: false, error: "BAD_REQUEST" };
       rec.photos.forEach((id) => delete demoDB.photos[id]);
+      delete demoDB.audio[rec.id];
       demoDB.records.splice(demoDB.records.indexOf(rec), 1);
     }
-    const recs = mine();
+    const withAudio = (arr) => arr.map((r) => Object.assign({}, r, { audio: demoDB.audio[r.id] ? demoDB.audio[r.id].secs : 0 }));
+    if (b.action === "audioSave") {
+      if (!mine().some((r) => r.id === b.id) || !b.data) return { ok: false, error: "BAD_REQUEST:NOT_FOUND" };
+      demoDB.audio[b.id] = { data: b.data, secs: Number(b.secs) || 1, mime: b.mime || "audio/mp4" };
+      return { ok: true, records: withAudio(mine()) };
+    }
+    if (b.action === "audioGet") {
+      const a = mine().some((r) => r.id === b.id) && demoDB.audio[b.id];
+      return a ? { ok: true, mime: a.mime, data: a.data, secs: a.secs } : { ok: false, error: "BAD_REQUEST:NOT_FOUND" };
+    }
+    if (b.action === "audioDelete") {
+      if (!mine().some((r) => r.id === b.id)) return { ok: false, error: "BAD_REQUEST:NOT_FOUND" };
+      delete demoDB.audio[b.id];
+      return { ok: true, records: withAudio(mine()) };
+    }
+    const recs = withAudio(mine());
     if (b.action === "comments") return { ok: true, comments: demoCmList(me, false) };
     if (/^(addcomment|editcomment|delcomment|readcomments)$/.test(b.action)) return demoCmAct(b, me, false) || { ok: false, error: "BAD_REQUEST" };
     if (b.action === "photo") return demoDB.photos[b.id] ? { ok: true, mime: "image/jpeg", data: demoDB.photos[b.id] } : { ok: false, error: "BAD_REQUEST" };
     if (b.action === "photos") return { ok: true, mime: "image/jpeg", photos: {} };
     if (b.action === "savethumb") return { ok: true };
     const out = { ok: true, name: me, goals: glu ? demoDB.goals : demoDB.goals2, timings: ["공복", "식전", "식후"], records: recs };
+    if (newDemoId) out.id = newDemoId;
     if (b.action === "login" && b.remember && !b.token) out.token = "demo-" + me; // 체험 모드용 가짜 열쇠
     return out;
   }
@@ -500,9 +544,9 @@
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").focus();
   }
   function leaveApp(msg, kind) {
-    session = null; records = []; clearPhotoUI(); cache.clear();
+    session = null; records = []; clearPhotoUI(); clearAudioUI(); cache.clear();
     staff = null; comments = []; cmEnabled = DEMO; openLogs = new Set(); drafts = {}; editingCm = null; pendingCmDel = null;
-    photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear(); wantImgs = []; legacyQueue = []; thumbUploads.length = 0;
+    photoCache.forEach((u) => URL.revokeObjectURL(u)); photoCache.clear(); audioCache.forEach((u) => URL.revokeObjectURL(u)); audioCache.clear(); wantImgs = []; legacyQueue = []; thumbUploads.length = 0;
     $("list").innerHTML = ""; $("app").classList.add("hidden"); $("btnLogout").classList.add("hidden");
     $("staffBar").classList.add("hidden"); $("formCard").classList.remove("hidden"); $("staffLogin").classList.add("hidden");
     $("recTitleText").textContent = "내 활동 기록"; $("newCm").textContent = ""; $("count").textContent = "";
@@ -551,7 +595,7 @@
     setEditUI(false);
     $("fDate").value = today(); $("fContent").value = ""; $("fFeeling").value = ""; $("fNote").value = "";
     document.querySelectorAll('input[name="goal"]').forEach((c) => (c.checked = false));
-    renderGlucose(); clearPhotoUI();
+    renderGlucose(); clearPhotoUI(); clearAudioUI();
   }
 
   /* 사진: 브라우저에서 크기를 줄여서 올립니다 */
@@ -598,6 +642,7 @@
 
   $("addForm").addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (rec) { status("녹음 중입니다. 먼저 '녹음 끝내기'를 눌러 주세요.", "err"); $("btnRec").focus(); return; }
     const goals = Array.from(document.querySelectorAll('input[name="goal"]:checked')).map((c) => c.value);
     if (!goals.length) { status("참여목표를 선택해 주세요.", "err"); const f = document.querySelector('input[name="goal"]'); if (f) f.focus(); return; }
     if (!$("fContent").value.trim()) { status("활동내용을 적어 주세요.", "err"); $("fContent").focus(); return; }
@@ -609,11 +654,151 @@
       glucose: "", timing: "",
       photos: newPhotos.map((p) => ({ data: p.b64, thumb: p.thumb }))
     });
+    if (!res.ok) { $("btnSave").disabled = false; status(MSG[res.error] || MSG.SERVER, "err"); return; }
+    let recs = res.records, audioFail = "";
+    const rid = wasEdit ? editing.id : res.id;
+    if (newAudio || (wasEdit && audioRemove && audioOld)) { // 기록을 저장한 뒤 음성을 올리거나 지웁니다
+      if (!rid) audioFail = "서버가 아직 음성 기능을 지원하지 않습니다.";
+      else {
+        status("음성을 올리는 중입니다. 잠시만 기다려 주세요…");
+        const ar = newAudio ? await call("audioSave", { id: rid, data: newAudio.b64, secs: Math.max(1, Math.round(newAudio.secs)), mime: newAudio.mime }) : await call("audioDelete", { id: rid });
+        if (!session) return; // 그사이 입장이 해제된 경우
+        if (ar.ok) { recs = ar.records || recs; const u = audioCache.get(rid); if (u) URL.revokeObjectURL(u); audioCache.delete(rid); }
+        else audioFail = audioMsg(ar, "음성을 올리지 못했습니다.");
+      }
+    }
     $("btnSave").disabled = false;
-    if (!res.ok) { status(MSG[res.error] || MSG.SERVER, "err"); return; }
-    resetForm(); pendingDel = null; setRecords(res.records); status(wasEdit ? "수정했습니다." : "저장했습니다.", "ok");
+    resetForm(); pendingDel = null; setRecords(recs);
+    if (audioFail) status("기록은 저장했지만 음성은 반영하지 못했습니다. " + audioFail + " 수정에서 다시 시도해 주세요.", "err");
+    else status(wasEdit ? "수정했습니다." : "저장했습니다.", "ok");
     $("list").scrollIntoView({ behavior: "smooth", block: "start" });
   });
+
+  /* ---------- 음성 (활동 기록 1건당 1개) ---------- */
+  function fmtSecs(s) { s = Math.round(s); const m = Math.floor(s / 60), r = s % 60; return m ? m + "분" + (r ? " " + r + "초" : "") : r + "초"; }
+  function audioDuration(url) { // 브라우저가 파일 길이를 읽을 수 있을 때만 길이를 돌려줌 (못 읽으면 0)
+    return new Promise((res) => {
+      const a = new Audio(); a.preload = "metadata";
+      const done = (v) => { a.onloadedmetadata = null; a.onerror = null; res(v); };
+      a.onloadedmetadata = () => done(isFinite(a.duration) && a.duration > 0 ? a.duration : 0);
+      a.onerror = () => done(0);
+      setTimeout(() => done(0), 8000);
+      a.src = url;
+    });
+  }
+  function readB64(file) {
+    return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(fr.error); fr.readAsDataURL(file); });
+  }
+  function renderAudioPrev() {
+    let h = "";
+    if (newAudio) {
+      h = '<div class="audio-prev"><audio controls src="' + newAudio.url + '"></audio><div class="row"><span class="hint">선택한 음성 · ' + fmtSecs(newAudio.secs) +
+        (audioOld && !audioRemove ? " (기존 음성은 이 파일로 바뀝니다)" : "") + '</span><button type="button" data-aact="drop">선택 취소</button></div></div>';
+    } else if (audioOld && !audioRemove) {
+      h = '<div class="audio-prev"><span class="hint">기존 음성이 있습니다 · ' + fmtSecs(audioOld) + '. 새 파일을 고르면 바뀝니다.</span><div class="row"><button type="button" data-aact="remove">기존 음성 삭제</button></div></div>';
+    } else if (audioOld && audioRemove) {
+      h = '<div class="audio-prev"><span class="hint">저장하면 기존 음성이 삭제됩니다.</span><div class="row"><button type="button" data-aact="undo">삭제 취소</button></div></div>';
+    }
+    $("audioPrev").innerHTML = h;
+  }
+  function clearAudioUI() {
+    recAbort();
+    if (newAudio) URL.revokeObjectURL(newAudio.url);
+    newAudio = null; audioRemove = false; audioOld = 0; renderAudioPrev();
+  }
+  $("fAudio").addEventListener("change", async (e) => {
+    const f = (e.target.files || [])[0]; e.target.value = "";
+    if (!f) return;
+    if (f.size > MAX_AUDIO_BYTES) { status("음성 파일이 너무 큽니다. 5MB 이하(3분 이내 녹음)로 올려 주세요.", "err"); return; }
+    const url = URL.createObjectURL(f);
+    status("음성 파일을 확인하는 중입니다…");
+    const secs = await audioDuration(url);
+    if (!secs) { URL.revokeObjectURL(url); status("이 음성 파일의 길이를 확인할 수 없습니다. m4a나 mp3 파일로 올려 주세요.", "err"); return; }
+    if (secs > MAX_AUDIO_SECS) { URL.revokeObjectURL(url); status("음성은 3분 이내만 올릴 수 있습니다. (선택한 파일: " + fmtSecs(secs) + ")", "err"); return; }
+    try {
+      const b64 = await readB64(f);
+      if (newAudio) URL.revokeObjectURL(newAudio.url);
+      newAudio = { b64, secs, url, mime: f.type || "" }; audioRemove = false;
+      renderAudioPrev(); status("음성을 골랐습니다. 저장하기를 누르면 올라갑니다.", "ok");
+    } catch (err) { URL.revokeObjectURL(url); status("이 음성 파일을 읽지 못했습니다. 다른 파일을 선택해 주세요.", "err"); }
+  });
+  $("audioPrev").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-aact]"); if (!b) return;
+    const a = b.dataset.aact;
+    if (a === "drop") { if (newAudio) URL.revokeObjectURL(newAudio.url); newAudio = null; }
+    else if (a === "remove") audioRemove = true;
+    else if (a === "undo") audioRemove = false;
+    renderAudioPrev(); $("fAudio").focus();
+  });
+  /* 앱에서 바로 녹음 (MediaRecorder). 지원하지 않는 환경(마이크 없음, 앱 안 브라우저 등)에서는 버튼을 숨기고 파일 선택만 사용 */
+  const REC_OK = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  let rec = null;   // 녹음 중일 때만 값이 있음
+  const fmtClock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  if (!REC_OK) $("recRow").classList.add("hidden");
+  function recCleanup() {
+    if (!rec) return;
+    clearInterval(rec.timer); clearTimeout(rec.stopTimer);
+    try { rec.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    rec = null;
+    $("btnRec").textContent = "녹음하기"; $("btnRec").setAttribute("aria-pressed", "false"); $("btnRec").classList.remove("rec-on"); $("recInfo").textContent = "";
+  }
+  function recAbort() { // 저장하지 않고 녹음을 버림 (나가기, 폼 초기화 등)
+    if (!rec) return;
+    rec.discard = true;
+    try { if (rec.mr.state !== "inactive") rec.mr.stop(); } catch (e) {}
+    recCleanup();
+  }
+  function recStop() { if (rec && rec.mr.state !== "inactive") { try { rec.mr.stop(); } catch (e) {} } }
+  async function recStart() {
+    if (rec) return;
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (err) {
+      const n = err && err.name;
+      status(n === "NotAllowedError" || n === "SecurityError" ? "마이크 사용이 허용되지 않았습니다. 브라우저 설정에서 마이크를 허용해 주세요." :
+        n === "NotFoundError" ? "마이크를 찾을 수 없습니다." : "녹음을 시작하지 못했습니다. 파일 선택으로 올려 주세요.", "err");
+      return;
+    }
+    const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((t) => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } });
+    let mr;
+    try { mr = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream); }
+    catch (err) { stream.getTracks().forEach((t) => t.stop()); status("이 기기에서는 앱 녹음을 쓸 수 없습니다. 파일 선택으로 올려 주세요.", "err"); return; }
+    const r = { mr, stream, chunks: [], t0: Date.now(), timer: 0, stopTimer: 0, warned: false, discard: false };
+    rec = r;
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
+    mr.onstop = async () => {
+      const secs = Math.min(MAX_AUDIO_SECS, (Date.now() - r.t0) / 1000);
+      if (rec === r) recCleanup();
+      if (r.discard) return;
+      const blob = new Blob(r.chunks, { type: mr.mimeType || type || "audio/webm" });
+      if (secs < 1 || !blob.size) { status("녹음이 너무 짧습니다. 다시 녹음해 주세요.", "err"); return; }
+      if (blob.size > MAX_AUDIO_BYTES) { status("녹음 파일이 너무 큽니다. 더 짧게 다시 녹음해 주세요.", "err"); return; }
+      try {
+        const b64 = await readB64(blob);
+        if (newAudio) URL.revokeObjectURL(newAudio.url);
+        newAudio = { b64, secs, url: URL.createObjectURL(blob), mime: blob.type }; audioRemove = false;
+        renderAudioPrev(); status("녹음을 마쳤습니다 (" + fmtSecs(secs) + "). 저장하기를 누르면 올라갑니다.", "ok");
+        $("btnRec").focus();
+      } catch (err) { status("녹음을 처리하지 못했습니다. 다시 녹음해 주세요.", "err"); }
+    };
+    mr.start();
+    $("btnRec").textContent = "녹음 끝내기"; $("btnRec").setAttribute("aria-pressed", "true"); $("btnRec").classList.add("rec-on");
+    r.timer = setInterval(() => {
+      const el = (Date.now() - r.t0) / 1000;
+      $("recInfo").textContent = "녹음 중 " + fmtClock(el) + " / " + fmtClock(MAX_AUDIO_SECS);
+      if (!r.warned && el >= MAX_AUDIO_SECS - 30) { r.warned = true; status("30초 남았습니다.", ""); }
+    }, 500);
+    r.stopTimer = setTimeout(() => { try { if (mr.state !== "inactive") mr.stop(); } catch (e) {} }, MAX_AUDIO_SECS * 1000);
+    status("녹음을 시작했습니다. 최대 3분까지 녹음됩니다. 끝내려면 '녹음 끝내기'를 누르세요. 다른 사람의 목소리가 들어가면 동의를 받아 주세요.", "ok");
+  }
+  $("btnRec").addEventListener("click", () => { if (rec) recStop(); else recStart(); });
+
+  function audioHtml(r) {
+    if (!r.audio || !r.id) return "";
+    const u = audioCache.get(r.id);
+    return '<div class="audio-box"><span class="lbl">음성 · ' + fmtSecs(r.audio) + "</span>" +
+      (u ? '<audio controls src="' + u + '"></audio>' : '<button type="button" data-act="audioload" data-id="' + esc(r.id) + '">음성 듣기</button>') + "</div>";
+  }
 
   /* ---------- 목록 ---------- */
   function setRecords(recs) {
@@ -641,7 +826,7 @@
       (r.feeling ? '<p><span class="lbl">활동소감</span>' + esc(r.feeling) + "</p>" : "") +
       (r.note ? '<p><span class="lbl">비고</span>' + esc(r.note) + "</p>" : "") +
       (r.photos.length ? '<div class="photos">' + r.photos.map((id, i) => '<img data-id="' + esc(id) + '" alt="' + esc(r.date) + ' 활동 사진 ' + (i + 1) + '" tabindex="0">').join("") + "</div>" : "") +
-      (staff ? "" : actionsHtml(r)) + commentsHtml(r) + "</article>"
+      audioHtml(r) + (staff ? "" : actionsHtml(r)) + commentsHtml(r) + "</article>"
     ).join("") : '<div class="card hint">아직 기록이 없습니다.</div>';
     loadPhotos("#list img[data-id]");
   }
@@ -662,7 +847,7 @@
     const first = Array.from(document.querySelectorAll('input[name="goal"]')).find((c) => r.goals.indexOf(c.value) >= 0);
     if (first) first.checked = true;
     $("fDate").value = r.date; $("fContent").value = r.content; $("fFeeling").value = r.feeling || ""; $("fNote").value = r.note || "";
-    newPhotos = []; keepPhotos = r.photos.slice(); renderPreviews();
+    newPhotos = []; keepPhotos = r.photos.slice(); renderPreviews(); clearAudioUI(); audioOld = r.audio || 0; renderAudioPrev();
     setEditUI(true); status(""); renderList();
     $("addTitle").setAttribute("tabindex", "-1"); $("addTitle").scrollIntoView({ behavior: "smooth", block: "start" }); $("addTitle").focus();
   }
@@ -674,6 +859,12 @@
     if (act === "edit" && r) startEdit(r);
     else if (act === "del") { pendingDel = id; renderList(); const c = document.querySelector('#list button[data-act="delno"]'); if (c) c.focus(); }
     else if (act === "delno") { pendingDel = null; renderList(); }
+    else if (act === "audioload") {
+      b.disabled = true; b.textContent = "불러오는 중…";
+      const res = await call(staff ? "staff_audioget" : "audioGet", { id });
+      if (!res.ok) { b.disabled = false; b.textContent = "음성 듣기"; status(audioMsg(res, MSG.SERVER), "err"); return; }
+      audioCache.set(id, b64ToUrl(res.data, res.mime || "audio/mp4")); status(""); renderList();
+    }
     else if (act === "delok") {
       b.disabled = true; status("삭제하는 중입니다…");
       const res = await call("delete", { id });
