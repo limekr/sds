@@ -224,6 +224,7 @@
     BAD_REQUEST: "입력한 내용을 확인해 주세요.",
     SERVER: "일시적인 오류가 있습니다. 잠시 후 다시 시도해 주세요.",
     NETWORK: "인터넷 연결을 확인해 주세요.",
+    TIMEOUT: "응답이 늦어지고 있습니다. 화면을 새로 고쳐 처리됐는지 확인한 뒤, 필요하면 다시 시도해 주세요.",
     STAFF_AUTH: "담당자 비밀번호가 맞지 않습니다. 다시 확인해 주세요.",
     STAFF_EXPIRED: "담당자 비밀번호가 바뀌었습니다. 다시 입장해 주세요."
   };
@@ -319,10 +320,14 @@
     let res;
     if (DEMO) res = await demo(body);
     else {
+      const ctl = new AbortController();
+      const limit = /^(add|update|audioSave)$/.test(action) ? 120000 : 30000; // 올리기·저장은 오래 걸릴 수 있어 더 길게
+      const timer = setTimeout(() => ctl.abort(), limit);
       try {
-        const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+        const r = await fetch(window.APP_CONFIG.API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), signal: ctl.signal });
         res = await r.json();
-      } catch (e) { res = { ok: false, error: "NETWORK" }; }
+      } catch (e) { res = { ok: false, error: e && e.name === "AbortError" ? "TIMEOUT" : "NETWORK" }; }
+      finally { clearTimeout(timer); }
     }
     if (!res.ok && typeof res.error === "string" && res.error.indexOf("BAD_REQUEST") === 0) { res.detail = res.error.split(":")[1] || ""; res.error = "BAD_REQUEST"; } // 세부 사유가 붙은 오류도 같은 안내문으로(사유는 detail에 보관)
     // 입장 중에 열쇠가 해제된 경우(담당자가 기기를 해제했거나 기간 만료) 처음 화면으로 돌려보냄
